@@ -43,31 +43,31 @@
 
 # Documentation
 
-- ✓ README.md - Overview and quick start
-- ✓ index.md - Complete list of documents to track updates
-- ✓ LICENSE - License documents
-- ✓ docs/00-prerequisites.md - Stage 0 prerequisites and Synology DS923+ setup
-- ✓ docs/01-setup-directories.md - Setup directories documentation
-- ✓ docs/02-volume-configuration.md - Volume configuration documentation
-- ✓ docs/03-consul-setup.md - Consul documentation
-- ✓ docs/04-traefik-setup.md - Traefik documentation
-- ✓ docs/05-vault-setup.md - Vault documentation
-- ✓ docs/06-registry-setup.md - Docker Registry documentation
-- ✓ docs/07-monitoring-setup.md - Monitoring stack documentation
-- ✓ docs/08-logging-setup.md - Logging stack documentation
-- ✓ docs/09-oidc-setup.md - User credential documentation
-- ✓ docs/10-homepage-setup.md - Test application to ensure the devops stack is working
-- ✓ docs/architecture-diagram.md - System architecture diagram
-- ✓ docs/backup-recovery.md - Backup and recovery procedures
-- ✓ docs/project-structure.md - Project structure documentation
-- ✓ docs/troubleshooting.md - Troubleshooting guide
-- ✓ docs/extending-the-platform.md - Extension and customization guide
-- ✓ docs/synology-considerations.md - Synology-specific limitations and workarounds
-- ✓ docs/self-signed-certificates.md - Local certificate authority and certificate management
-- ✓ docs/storage-configuration.md - Synology storage setup and management
-- ✓ docs/network-configuration.md - Network setup and security for Synology environment
-- ✓ docs/stages-overview.md - Overview of the staged deployment approach (0, 1, 2)
-- ✓ docs/stage0-manual-config.md - Detailed stage 0 manual configuration guide
+- README.md - Overview and quick start
+- index.md - Complete list of documents to track updates
+- LICENSE - License documents
+- docs/00-prerequisites.md - Stage 0 prerequisites and Synology DS923+ setup
+- docs/01-setup-directories.md - Setup directories documentation
+- docs/02-volume-configuration.md - Volume configuration documentation
+- docs/03-consul-setup.md - Consul documentation
+- docs/04-traefik-setup.md - Traefik documentation
+- docs/05-vault-setup.md - Vault documentation
+- docs/06-registry-setup.md - Docker Registry documentation
+- docs/07-monitoring-setup.md - Monitoring stack documentation
+- docs/08-logging-setup.md - Logging stack documentation
+- docs/09-oidc-setup.md - User credential documentation
+- docs/10-homepage-setup.md - Test application to ensure the devops stack is working
+- docs/architecture-diagram.md - System architecture diagram
+- docs/backup-recovery.md - Backup and recovery procedures
+- docs/project-structure.md - Project structure documentation
+- docs/troubleshooting.md - Troubleshooting guide
+- docs/extending-the-platform.md - Extension and customization guide
+- docs/synology-considerations.md - Synology-specific limitations and workarounds
+- docs/self-signed-certificates.md - Local certificate authority and certificate management
+- docs/storage-configuration.md - Synology storage setup and management
+- docs/network-configuration.md - Network setup and security for Synology environment
+- docs/stages-overview.md - Overview of the staged deployment approach (0, 1, 2)
+- docs/stage0-manual-config.md - Detailed stage 0 manual configuration guide
 
 # Log Files
 
