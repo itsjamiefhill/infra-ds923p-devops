@@ -115,6 +115,31 @@ For optimal performance:
    - In DSM, go to **Control Panel** > **Network** > **Traffic Control**
    - Enable and configure guaranteed bandwidth for services
 
+### Multiple Network Interface Handling
+
+If your Synology has multiple network interfaces, you need to handle service binding carefully:
+
+1. **Determine your primary IP**:
+   ```bash
+   # Most reliable method to get primary IP
+   PRIMARY_IP=$(ip route get 1 | awk '{print $7;exit}' 2>/dev/null || hostname -I | awk '{print $1}')
+   ```
+
+2. **Explicitly bind services**:
+   - For Consul:
+     ```bash
+     -bind=${PRIMARY_IP} -advertise=${PRIMARY_IP}
+     ```
+   - For other services:
+     ```bash
+     --ip=${PRIMARY_IP} or --host=${PRIMARY_IP}
+     ```
+
+3. **Use Docker host network mode** for critical infrastructure services to avoid networking issues:
+   ```bash
+   sudo docker run -d --network host [other options] image_name
+   ```
+
 ## Firewall Configuration
 
 ### Synology Firewall
@@ -189,25 +214,119 @@ For client devices, add entries to the hosts file:
 10.0.4.10  home.homelab.local
 ```
 
-### Consul DNS Integration
+### Synology-Specific DNS Challenges
 
-To use Consul for service discovery DNS:
+Synology DSM has specific limitations regarding DNS services that affect service discovery:
 
-1. Configure the Synology DNS server to forward Consul requests:
+1. **Limited dnsmasq Support**:
+   - Many Synology models don't have dnsmasq installed by default
+   - The `systemctl restart dnsmasq` command often fails on Synology systems
+   - DSM updates can reset DNS configurations
+
+2. **Hosts File as Primary Method**:
+   - The most reliable method for DNS resolution on Synology is using the `/etc/hosts` file
+   - Add an entry for Consul service discovery:
+     ```bash
+     # Get the primary IP address
+     PRIMARY_IP=$(ip route get 1 | awk '{print $7;exit}' 2>/dev/null || hostname -I | awk '{print $1}')
+     
+     # Remove any existing entry and add the new one
+     sudo sed -i '/consul\.service\.consul/d' /etc/hosts
+     echo "${PRIMARY_IP} consul.service.consul" | sudo tee -a /etc/hosts
+     ```
+
+3. **Multiple Network Interfaces**:
+   - Synology devices often have multiple network interfaces which can cause binding issues
+   - Always explicitly specify the bind address for network services:
+     ```bash
+     # For Consul
+     -bind=${PRIMARY_IP} -advertise=${PRIMARY_IP}
+     ```
+
+### Consul DNS Integration Options
+
+To use Consul for service discovery DNS, choose one of these approaches:
+
+#### Option 1: Hosts File (Simplest)
+
+1. On the Synology device:
    ```bash
-   sudo mkdir -p /etc/dnsmasq.conf.d
-   echo "server=/consul/127.0.0.1#8600" | sudo tee /etc/dnsmasq.conf.d/10-consul
-   sudo systemctl restart dnsmasq
+   # Add entries for essential services
+   echo "10.0.4.10 consul.service.consul" | sudo tee -a /etc/hosts
    ```
 
-2. Test DNS resolution:
+2. Add similar entries on client machines or for specific services as needed
+
+#### Option 2: dnsmasq (If Available)
+
+If dnsmasq is available on your Synology:
+
+1. Configure forwarding:
    ```bash
-   dig @127.0.0.1 consul.service.consul
+   # Check if dnsmasq exists
+   if command -v dnsmasq &>/dev/null; then
+     sudo mkdir -p /etc/dnsmasq.conf.d
+     echo "server=/consul/127.0.0.1#8600" | sudo tee /etc/dnsmasq.conf.d/10-consul
+     # Attempt restart (may not work on all Synology models)
+     sudo systemctl restart dnsmasq 2>/dev/null || true
+   fi
    ```
 
-3. For client devices, add your Synology as a DNS server:
-   - DNS Server: 10.0.4.10 (your Synology IP)
-   - This allows resolution of both `.homelab.local` and `.service.consul` domains
+2. Test resolution:
+   ```bash
+   # Using Docker for testing if dig is not available
+   sudo docker run --rm --network host alpine sh -c \
+     "apk add --no-cache bind-tools && dig @127.0.0.1 -p 8600 consul.service.consul"
+   ```
+
+#### Option 3: Router DNS Configuration (Best Network-Wide Solution)
+
+Configure your router to handle DNS forwarding:
+
+1. Access your router's administration interface
+2. Find DNS or DHCP server settings
+3. Add a conditional forwarding rule:
+   ```
+   domain=consul
+   server=/consul/10.0.4.10
+   ```
+4. Set your router as the primary DNS server for all devices
+
+#### Option 4: Direct Docker Network Setup
+
+For containers needing Consul DNS resolution:
+
+```hcl
+config {
+  image = "your-image:version"
+  
+  # Add DNS options
+  dns_servers = ["127.0.0.1"]
+  dns_search_domains = ["service.consul"]
+  
+  # Alternative approach using extra_hosts
+  extra_hosts = [
+    "consul.service.consul:127.0.0.1",
+    "vault.service.consul:10.0.4.10"
+  ]
+}
+```
+
+### Service Discovery Testing
+
+Verify DNS configuration works:
+
+```bash
+# Test local resolution on Synology
+ping consul.service.consul
+
+# Direct query to Consul DNS (should always work)
+sudo docker run --rm --network host alpine sh -c \
+  "apk add --no-cache bind-tools && dig @127.0.0.1 -p 8600 consul.service.consul"
+
+# Verify service discovery with curl
+curl -v http://consul.service.consul:8500/ui/
+```
 
 ## Service Discovery
 
@@ -439,6 +558,36 @@ scrape_configs:
    curl http://localhost:8500/v1/health/service/<service-name>
    ```
 
+### Multiple Private IPv4 Addresses Error
+
+If you encounter this error with Consul:
+```
+==> Multiple private IPv4 addresses found. Please configure one with 'bind' and/or 'advertise'.
+```
+
+**Solution**:
+
+1. Get your primary IP address:
+   ```bash
+   PRIMARY_IP=$(ip route get 1 | awk '{print $7;exit}' 2>/dev/null || hostname -I | awk '{print $1}')
+   ```
+
+2. Use explicit bind and advertise parameters:
+   ```bash
+   sudo docker run -d --name consul \
+     --restart always \
+     --network host \
+     -v ${DATA_DIR}/consul_data:/consul/data \
+     hashicorp/consul:1.15.4 \
+     agent -server -bootstrap \
+     -bind=$PRIMARY_IP \
+     -advertise=$PRIMARY_IP \
+     -client=0.0.0.0 \
+     -ui
+   ```
+
+3. For other services with similar issues, use comparable binding parameters specific to that service
+
 ### Network Diagnostic Tools
 
 1. **Basic Network Tools**:
@@ -453,16 +602,19 @@ scrape_configs:
    nmap -p 1-65535 localhost
    ```
 
-2. **Consul DNS Debugging**:
+2. **Consul DNS Debugging (Using Docker)**:
    ```bash
    # Check Consul DNS service
-   dig @127.0.0.1 -p 8600 consul.service.consul
+   sudo docker run --rm --network host alpine sh -c \
+     "apk add --no-cache bind-tools && dig @127.0.0.1 -p 8600 consul.service.consul"
    
    # List all services
-   dig @127.0.0.1 -p 8600 +short service.consul SRV
+   sudo docker run --rm --network host alpine sh -c \
+     "apk add --no-cache bind-tools && dig @127.0.0.1 -p 8600 +short service.consul SRV"
    
    # Check specific service
-   dig @127.0.0.1 -p 8600 +short grafana.service.consul SRV
+   sudo docker run --rm --network host alpine sh -c \
+     "apk add --no-cache bind-tools && dig @127.0.0.1 -p 8600 +short grafana.service.consul SRV"
    ```
 
 3. **Traefik Debugging**:
@@ -490,9 +642,13 @@ scrape_configs:
 
 1. **Restoring DNS Configuration After DSM Update**:
    ```bash
+   # Restore hosts file entry
+   echo "10.0.4.10 consul.service.consul" | sudo tee -a /etc/hosts
+   
+   # If using dnsmasq (may not work on all systems)
    sudo mkdir -p /etc/dnsmasq.conf.d
    echo "server=/consul/127.0.0.1#8600" | sudo tee /etc/dnsmasq.conf.d/10-consul
-   sudo systemctl restart dnsmasq
+   sudo systemctl restart dnsmasq 2>/dev/null || true
    ```
 
 2. **Fixing Certificate Trust Issues**:
@@ -511,3 +667,14 @@ scrape_configs:
    # Change service port in configuration
    # Edit jobs/<service>.hcl
    ```
+
+4. **Creating Backup DNS Configuration Task**:
+   - Create a scheduled task in Synology Task Scheduler
+   - Set it to run at boot and periodically (e.g., daily)
+   - Use this script:
+     ```bash
+     #!/bin/bash
+     # Restore Consul DNS entries
+     grep -q "consul.service.consul" /etc/hosts || \
+       echo "10.0.4.10 consul.service.consul" | sudo tee -a /etc/hosts
+     ```

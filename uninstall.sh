@@ -1,6 +1,6 @@
 #!/bin/bash
 # uninstall.sh
-# Limited uninstall script that cleans up directories and volumes from parts 01 and 02
+# Limited uninstall script that cleans up directories, volumes, and services from parts 01-03
 
 set -e
 
@@ -67,7 +67,7 @@ confirm() {
 # Function to setup logging
 setup_logging() {
     mkdir -p "${LOGS_DIR}"
-    echo "=== Uninstallation (parts 01-02) started at $(date) ===" > "${LOGS_DIR}/uninstall.log"
+    echo "=== Uninstallation (parts 01-03) started at $(date) ===" > "${LOGS_DIR}/uninstall.log"
 }
 
 # Function to check if Nomad is available
@@ -79,16 +79,69 @@ check_nomad() {
     success "Nomad is available"
 }
 
+# Function to stop Consul job
+stop_consul() {
+    log "Stopping Consul job..."
+    
+    # Check if Consul is running as a Docker container
+    if sudo docker ps | grep -q "consul"; then
+        log "Consul is running as a Docker container, stopping it..."
+        sudo docker stop consul || warn "Failed to stop Consul container"
+        sudo docker rm consul || warn "Failed to remove Consul container"
+        success "Consul container stopped and removed"
+    # Check if Consul job exists in Nomad and stop it
+    elif nomad job status consul &>/dev/null; then
+        nomad job stop -purge consul || warn "Failed to stop Consul job"
+        sleep 5 # Give Nomad time to stop the job
+        success "Consul job stopped and purged"
+    else
+        log "Consul job not found or already stopped"
+    fi
+}
+
+# Function to remove Consul DNS configuration
+remove_consul_dns() {
+    log "Removing Consul DNS integration..."
+    
+    # Remove hosts file entry
+    if grep -q "consul\.service\.consul" /etc/hosts; then
+        if confirm "Do you want to remove the Consul entry from /etc/hosts?"; then
+            sudo sed -i '/consul\.service\.consul/d' /etc/hosts
+            success "Consul hosts file entry removed"
+        else
+            log "Keeping Consul hosts file entry"
+        fi
+    else
+        log "Consul hosts file entry not found"
+    fi
+    
+    # Try to remove dnsmasq configuration if it exists
+    if [ -f "/etc/dnsmasq.conf.d/10-consul" ]; then
+        if confirm "Do you want to remove Consul dnsmasq integration?"; then
+            sudo rm -f /etc/dnsmasq.conf.d/10-consul
+            # Try to restart dnsmasq if it exists
+            if command -v systemctl &>/dev/null && systemctl list-unit-files | grep -q dnsmasq; then
+                sudo systemctl restart dnsmasq || warn "Failed to restart dnsmasq service"
+            fi
+            success "Consul dnsmasq integration removed"
+        else
+            log "Keeping Consul dnsmasq integration"
+        fi
+    else
+        log "Consul dnsmasq integration not found"
+    fi
+}
+
 # Function to remove Nomad volumes
 remove_nomad_volumes() {
     log "Removing Nomad volumes..."
     
     # List of volumes to delete
     VOLUMES=(
+        "consul_data"  # Consul data volume
         "high_performance"
         "high_capacity"
         "standard"
-        "consul_data"
         "vault_data"
         "registry_data"
         "prometheus_data"
@@ -137,6 +190,19 @@ cleanup_local_files() {
         # Remove volume configuration
         rm -f ${CONFIG_DIR}/volumes.hcl
         
+        # Remove Consul job file
+        rm -f ${JOB_DIR}/consul.hcl
+        rm -f ${JOB_DIR}/consul.reference
+        
+        # Remove Consul DNS backup config
+        rm -f ${CONFIG_DIR}/10-consul
+        
+        # Remove start/stop scripts if they exist
+        if [ -f "${SCRIPT_DIR}/bin/start-consul.sh" ]; then
+            rm -f ${SCRIPT_DIR}/bin/start-consul.sh
+            rm -f ${SCRIPT_DIR}/bin/stop-consul.sh
+        fi
+        
         success "Local configuration files cleaned up"
     else
         log "Skipping local file cleanup"
@@ -146,7 +212,7 @@ cleanup_local_files() {
 # Function to display uninstallation summary
 show_summary() {
     echo -e "\n${GREEN}==========================================================${NC}"
-    echo -e "${GREEN}      HomeLab DevOps Platform Uninstallation (Parts 01-02)   ${NC}"
+    echo -e "${GREEN}      HomeLab DevOps Platform Uninstallation (Parts 01-03)   ${NC}"
     echo -e "${GREEN}==========================================================${NC}"
     echo -e "\n${BLUE}Uninstallation completed with the following actions:${NC}\n"
     
@@ -155,6 +221,29 @@ show_summary() {
         echo -e "- ${YELLOW}Config Files:${NC} Volume configuration removed"
     else
         echo -e "- ${YELLOW}Config Files:${NC} Volume configuration preserved"
+    fi
+    
+    # Check if Consul job exists
+    if sudo docker ps | grep -q "consul"; then
+        echo -e "- ${YELLOW}Services:${NC} Consul service still running as Docker container"
+    elif nomad job status consul &>/dev/null; then
+        echo -e "- ${YELLOW}Services:${NC} Consul service still running as Nomad job"
+    else
+        echo -e "- ${YELLOW}Services:${NC} Consul service stopped and removed"
+    fi
+    
+    # Check if hosts file has Consul entry
+    if grep -q "consul\.service\.consul" /etc/hosts; then
+        echo -e "- ${YELLOW}DNS:${NC} Consul hosts file entry preserved"
+    else
+        echo -e "- ${YELLOW}DNS:${NC} Consul hosts file entry removed"
+    fi
+    
+    # Check if Consul DNS integration exists
+    if [ -f "/etc/dnsmasq.conf.d/10-consul" ]; then
+        echo -e "- ${YELLOW}DNS:${NC} Consul dnsmasq integration preserved"
+    else
+        echo -e "- ${YELLOW}DNS:${NC} Consul dnsmasq integration removed"
     fi
     
     # Check Nomad volumes
@@ -166,7 +255,7 @@ show_summary() {
     fi
     
     # Check data directories
-    if [ ! -d "${DATA_DIR}/high_performance" ] && [ ! -d "${DATA_DIR}/high_capacity" ] && [ ! -d "${DATA_DIR}/standard" ]; then
+    if [ ! -d "${DATA_DIR}/consul_data" ] && [ ! -d "${DATA_DIR}/high_performance" ] && [ ! -d "${DATA_DIR}/high_capacity" ] && [ ! -d "${DATA_DIR}/standard" ]; then
         echo -e "- ${YELLOW}Data:${NC} Data directories removed"
     else
         echo -e "- ${YELLOW}Data:${NC} Data directories preserved"
@@ -180,11 +269,11 @@ show_summary() {
 # Main function
 main() {
     echo -e "${GREEN}==========================================================${NC}"
-    echo -e "${GREEN}  HomeLab DevOps Platform Uninstallation Script (Parts 01-02) ${NC}"
+    echo -e "${GREEN}  HomeLab DevOps Platform Uninstallation Script (Parts 01-03) ${NC}"
     echo -e "${GREEN}==========================================================${NC}"
     
     # Confirm before proceeding
-    if ! confirm "This will uninstall the HomeLab DevOps Platform directories and volumes (Parts 01-02). Do you want to continue?"; then
+    if ! confirm "This will uninstall the HomeLab DevOps Platform directories, volumes, and services (Parts 01-03). Do you want to continue?"; then
         echo -e "\n${YELLOW}Uninstallation cancelled.${NC}"
         exit 0
     fi
@@ -194,6 +283,12 @@ main() {
     
     # Check Nomad
     check_nomad
+    
+    # Step 0: Stop Consul job
+    stop_consul
+    
+    # Step 0.5: Remove Consul DNS integration
+    remove_consul_dns
     
     # Step 1: Remove Nomad volumes
     remove_nomad_volumes

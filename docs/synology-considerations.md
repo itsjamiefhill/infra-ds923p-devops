@@ -247,20 +247,69 @@ Configure the DSM firewall to allow required services:
 
 ### DNS Configuration
 
-To integrate Consul DNS with Synology's DNS server:
+### DNS Resolution Limitations on Synology
 
-1. Create a custom DNS configuration:
-   ```bash
-   sudo mkdir -p /etc/dnsmasq.conf.d
-   echo "server=/consul/127.0.0.1#8600" | sudo tee /etc/dnsmasq.conf.d/10-consul
-   ```
+Synology DSM has specific limitations regarding DNS services that affect the HomeLab DevOps Platform:
 
-2. Restart the DNS service:
-   ```bash
-   sudo systemctl restart dnsmasq
-   ```
+1. **Limited dnsmasq Support**:
+   - Unlike standard Linux distributions, many Synology models do not have dnsmasq installed by default
+   - Even when installed, the service manager (systemd) may not be configured to manage it properly
+   - The `systemctl restart dnsmasq` command often fails on Synology systems
 
-Note that this configuration may be reset after DSM updates.
+2. **Hosts File Alternative**:
+   - The most reliable DNS integration method on Synology is to use the `/etc/hosts` file
+   - This approach works consistently across all Synology models and DSM versions
+   - Example implementation:
+     ```bash
+     # Get the primary IP address
+     PRIMARY_IP=$(ip route get 1 | awk '{print $7;exit}' 2>/dev/null || hostname -I | awk '{print $1}')
+     
+     # Add consul.service.consul to hosts file (remove any existing entry first)
+     sudo sed -i '/consul\.service\.consul/d' /etc/hosts
+     echo "${PRIMARY_IP} consul.service.consul" | sudo tee -a /etc/hosts
+     ```
+
+3. **Network-Wide DNS Integration**:
+   - For network-wide service discovery, configure your router to forward .consul domains to your Synology
+   - Many modern routers support custom DNS forwarding rules
+   - Example router configuration:
+     ```
+     server=/consul/10.0.4.78
+     ```
+
+4. **Handling Multiple Network Interfaces**:
+   - Synology devices often have multiple network interfaces which can confuse service binding
+   - Always explicitly specify the bind address for network services
+   - Use a reliable method to determine the primary IP:
+     ```bash
+     # Reliable primary IP detection
+     PRIMARY_IP=$(ip route get 1 | awk '{print $7;exit}' 2>/dev/null || hostname -I | awk '{print $1}')
+     ```
+
+5. **DSM Updates and DNS**:
+   - DSM updates may reset custom DNS configurations
+   - Store a backup of your hosts file entries and restore them after updates
+   - Consider creating a scheduled task to check and restore DNS configuration
+
+### Recommended DNS Configuration Approach
+
+For the HomeLab DevOps Platform on Synology, we recommend this tiered approach:
+
+1. **Local Resolution**: Configure `/etc/hosts` on the Synology device
+   - For essential services like Consul
+   - Ensures the platform itself can resolve service names
+
+2. **Service-to-Service Resolution**: Use direct IP references in service configs
+   - Reliable but less flexible
+   - Example: `http://10.0.4.78:8500` instead of `http://consul.service.consul:8500`
+
+3. **Network Resolution**: Configure router DNS forwarding
+   - For client devices to access services by name
+   - More flexible than managing hosts files on multiple devices
+
+4. **Advanced Integration**: For full Consul DNS integration, consider:
+   - Running a dedicated DNS server that forwards .consul domains to Consul
+   - Using a container-based dnsmasq that's independent of the Synology system
 
 ## Memory Management
 

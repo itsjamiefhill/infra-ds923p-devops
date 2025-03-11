@@ -1,6 +1,6 @@
 #!/bin/bash
 # HomeLab DevOps Platform Installation Script
-# Limited version executing only parts 01 and 02 for initial testing
+# Limited version executing parts 01-03 for initial testing
 
 set -e
 
@@ -105,6 +105,17 @@ check_prerequisites() {
     sudo -v || error "Failed to obtain sudo privileges."
   fi
   
+  # Check for curl (needed for Consul verification)
+  if ! command -v curl &> /dev/null; then
+    error "curl is not installed. Please install curl first."
+  fi
+  
+  # Check for dig (needed for Consul DNS testing)
+  if ! command -v dig &> /dev/null; then
+    warn "dig is not installed. This will be needed for Consul DNS verification."
+    warn "Consider installing dnsutils package."
+  fi
+  
   success "All prerequisites satisfied"
 }
 
@@ -134,7 +145,7 @@ run_module() {
 
 # Main installation process
 main() {
-  echo_log "Starting HomeLab DevOps Platform installation (parts 01-02 only)..."
+  echo_log "Starting HomeLab DevOps Platform installation (parts 01-03)..."
   
   # Setup script environment (creates log directory and loads config)
   setup_script_environment
@@ -145,11 +156,13 @@ main() {
   # Load configuration (already done in setup_script_environment, but kept for clarity)
   load_configuration
   
-  # Run module scripts 01 and 02 only
+  # Run module scripts 01, 02, and 03
   run_module "01-setup-directories.sh"
   run_module "02-configure-volumes.sh"
+  run_module "03-deploy-consul.sh"
   
-  log "Initial installation (parts 01-02) completed successfully!"
+  log "Initial installation (parts 01-03) completed successfully!"
+  log "You can access Consul UI at http://localhost:${CONSUL_HTTP_PORT} or http://consul.homelab.local (if DNS is configured)"
   log "You can now proceed with testing before continuing to the next parts."
 }
 
