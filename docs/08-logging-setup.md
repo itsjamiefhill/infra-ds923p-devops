@@ -136,7 +136,7 @@ scrape_configs:
       labels:
         job: nomad
         host: ${HOSTNAME}
-        __path__: /var/lib/nomad/alloc/*/*/alloc/logs/*
+        __path__: /var/lib/docker/nomad/alloc/*/*/alloc/logs/*
 ```
 
 ## Memory Optimization for Synology DS923+
@@ -165,7 +165,7 @@ Loki data is persisted using a Nomad volume:
 
 - **Volume Name**: loki_data
 - **Storage Class**: high_capacity (given the size of log data)
-- **Host Path**: `/volume1/nomad/volumes/high_capacity/loki_data` (default)
+- **Host Path**: `/volume1/docker/docker/nomad/volumes/high_capacity/loki_data` (default)
 - **Container Path**: `/loki`
 
 This ensures that logs are maintained across restarts and DSM updates.
@@ -347,7 +347,7 @@ scrape_configs:
       labels:
         job: nomad
         host: ${HOSTNAME}
-        __path__: /var/lib/nomad/alloc/*/*/alloc/logs/*
+        __path__: /var/lib/docker/nomad/alloc/*/*/alloc/logs/*
 EOF
         destination = "local/promtail-config.yaml"
       }
@@ -402,7 +402,7 @@ For Synology DS923+, Promtail collects logs from:
 
 1. **DSM System Logs**: Located in `/var/log/`
 2. **Container Logs**: Located in `/var/packages/ContainerManager/var/docker/containers/`
-3. **Nomad Allocation Logs**: Located in `/var/lib/nomad/alloc/`
+3. **Nomad Allocation Logs**: Located in `/var/lib/docker/nomad/alloc/`
 4. **Application Logs**: Any custom application logs mounted into containers
 
 ## Log Retention and Storage
@@ -493,14 +493,14 @@ To backup Loki data:
 
 ```bash
 # Option 1: Using Synology Hyper Backup
-# Include /volume1/nomad/volumes/high_capacity/loki_data in your backup task
+# Include /volume1/docker/nomad/volumes/high_capacity/loki_data in your backup task
 
 # Option 2: Manual backup
 # Stop Loki
 nomad job stop loki
 
 # Backup the data directory
-tar -czf /volume2/backups/services/loki_backup.tar.gz -C /volume1/nomad/volumes/high_capacity loki_data
+tar -czf /volume2/backups/services/loki_backup.tar.gz -C /volume1/docker/nomad/volumes/high_capacity loki_data
 
 # Restart Loki
 nomad job run jobs/loki.hcl
@@ -515,8 +515,8 @@ To restore Loki data:
 nomad job stop loki
 
 # Restore the data directory
-rm -rf /volume1/nomad/volumes/high_capacity/loki_data/*
-tar -xzf /volume2/backups/services/loki_backup.tar.gz -C /volume1/nomad/volumes/high_capacity
+rm -rf /volume1/docker/nomad/volumes/high_capacity/loki_data/*
+tar -xzf /volume2/backups/services/loki_backup.tar.gz -C /volume1/docker/nomad/volumes/high_capacity
 
 # Restart Loki
 nomad job run jobs/loki.hcl

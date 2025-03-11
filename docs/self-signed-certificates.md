@@ -32,18 +32,18 @@ For a simple setup, create a wildcard certificate for all services:
 
 ```bash
 # Create directory for certificates
-mkdir -p /volume1/nomad/config/certs
+mkdir -p /volume1/docker/nomad/config/certs
 
 # Generate a self-signed wildcard certificate
 openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-  -keyout /volume1/nomad/config/certs/homelab.key \
-  -out /volume1/nomad/config/certs/homelab.crt \
+  -keyout /volume1/docker/nomad/config/certs/homelab.key \
+  -out /volume1/docker/nomad/config/certs/homelab.crt \
   -subj "/CN=*.homelab.local" \
   -addext "subjectAltName=DNS:*.homelab.local,DNS:homelab.local"
 
 # Copy to volume directory for mounting
-mkdir -p /volume1/nomad/volumes/certificates
-cp /volume1/nomad/config/certs/homelab.* /volume1/nomad/volumes/certificates/
+mkdir -p /volume1/docker/nomad/volumes/certificates
+cp /volume1/docker/nomad/config/certs/homelab.* /volume1/docker/nomad/volumes/certificates/
 ```
 
 This creates a certificate valid for 10 years (3650 days) that covers all `*.homelab.local` subdomains.
@@ -71,17 +71,17 @@ For a more robust setup, create your own Certificate Authority (CA) and issue ce
 
 ```bash
 # Create directories
-mkdir -p /volume1/nomad/config/ca/{certs,private,newcerts,crl}
-touch /volume1/nomad/config/ca/index.txt
-echo 1000 > /volume1/nomad/config/ca/serial
+mkdir -p /volume1/docker/nomad/config/ca/{certs,private,newcerts,crl}
+touch /volume1/docker/nomad/config/ca/index.txt
+echo 1000 > /volume1/docker/nomad/config/ca/serial
 
 # Create CA configuration file
-cat > /volume1/nomad/config/ca/openssl.cnf << EOF
+cat > /volume1/docker/nomad/config/ca/openssl.cnf << EOF
 [ ca ]
 default_ca = CA_default
 
 [ CA_default ]
-dir               = /volume1/nomad/config/ca
+dir               = /volume1/docker/nomad/config/ca
 certs             = \$dir/certs
 crl_dir           = \$dir/crl
 database          = \$dir/index.txt
@@ -155,13 +155,13 @@ extendedKeyUsage = serverAuth
 EOF
 
 # Generate CA private key
-openssl genrsa -out /volume1/nomad/config/ca/private/ca.key 4096
+openssl genrsa -out /volume1/docker/nomad/config/ca/private/ca.key 4096
 
 # Create root CA certificate
-openssl req -x509 -new -nodes -key /volume1/nomad/config/ca/private/ca.key \
-  -sha256 -days 3650 -out /volume1/nomad/config/ca/certs/ca.crt \
+openssl req -x509 -new -nodes -key /volume1/docker/nomad/config/ca/private/ca.key \
+  -sha256 -days 3650 -out /volume1/docker/nomad/config/ca/certs/ca.crt \
   -subj "/CN=HomeLab Root CA/O=HomeLab DevOps/C=US" \
-  -config /volume1/nomad/config/ca/openssl.cnf \
+  -config /volume1/docker/nomad/config/ca/openssl.cnf \
   -extensions v3_ca
 ```
 
@@ -169,11 +169,11 @@ openssl req -x509 -new -nodes -key /volume1/nomad/config/ca/private/ca.key \
 
 ```bash
 # Create private key
-openssl genrsa -out /volume1/nomad/config/certs/homelab.key 2048
+openssl genrsa -out /volume1/docker/nomad/config/certs/homelab.key 2048
 
 # Create CSR
-openssl req -new -key /volume1/nomad/config/certs/homelab.key \
-  -out /volume1/nomad/config/certs/homelab.csr \
+openssl req -new -key /volume1/docker/nomad/config/certs/homelab.key \
+  -out /volume1/docker/nomad/config/certs/homelab.csr \
   -subj "/CN=*.homelab.local/O=HomeLab DevOps"
 ```
 
@@ -182,7 +182,7 @@ openssl req -new -key /volume1/nomad/config/certs/homelab.key \
 Create an extensions file for the wildcard certificate:
 
 ```bash
-cat > /volume1/nomad/config/certs/homelab.ext << EOF
+cat > /volume1/docker/nomad/config/certs/homelab.ext << EOF
 authorityKeyIdentifier=keyid,issuer
 basicConstraints=CA:FALSE
 keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
@@ -194,17 +194,17 @@ DNS.2 = homelab.local
 EOF
 
 # Sign the certificate
-openssl x509 -req -in /volume1/nomad/config/certs/homelab.csr \
-  -CA /volume1/nomad/config/ca/certs/ca.crt \
-  -CAkey /volume1/nomad/config/ca/private/ca.key \
+openssl x509 -req -in /volume1/docker/nomad/config/certs/homelab.csr \
+  -CA /volume1/docker/nomad/config/ca/certs/ca.crt \
+  -CAkey /volume1/docker/nomad/config/ca/private/ca.key \
   -CAcreateserial \
-  -out /volume1/nomad/config/certs/homelab.crt \
+  -out /volume1/docker/nomad/config/certs/homelab.crt \
   -days 3650 -sha256 \
-  -extfile /volume1/nomad/config/certs/homelab.ext
+  -extfile /volume1/docker/nomad/config/certs/homelab.ext
 
 # Copy to volume directory for mounting
-cp /volume1/nomad/config/certs/homelab.* /volume1/nomad/volumes/certificates/
-cp /volume1/nomad/config/ca/certs/ca.crt /volume1/nomad/volumes/certificates/
+cp /volume1/docker/nomad/config/certs/homelab.* /volume1/docker/nomad/volumes/certificates/
+cp /volume1/docker/nomad/config/ca/certs/ca.crt /volume1/docker/nomad/volumes/certificates/
 ```
 
 ## Certificate Distribution
@@ -216,10 +216,10 @@ For your certificates to be trusted across your devices, you need to distribute 
 1. **Export the certificate** from your Synology:
    ```bash
    # If using just self-signed cert
-   scp your-username@synology-ip:/volume1/nomad/config/certs/homelab.crt .
+   scp your-username@synology-ip:/volume1/docker/nomad/config/certs/homelab.crt .
    
    # If using CA
-   scp your-username@synology-ip:/volume1/nomad/config/ca/certs/ca.crt .
+   scp your-username@synology-ip:/volume1/docker/nomad/config/ca/certs/ca.crt .
    ```
 
 2. **Install the certificate**:
@@ -314,10 +314,10 @@ For the Docker Registry to work with self-signed certificates, configure Docker 
 sudo mkdir -p /etc/docker/certs.d/registry.homelab.local:5000
 
 # Copy self-signed certificate
-sudo cp /volume1/nomad/config/certs/homelab.crt /etc/docker/certs.d/registry.homelab.local:5000/ca.crt
+sudo cp /volume1/docker/nomad/config/certs/homelab.crt /etc/docker/certs.d/registry.homelab.local:5000/ca.crt
 
 # If using a CA, use the CA certificate instead
-# sudo cp /volume1/nomad/config/ca/certs/ca.crt /etc/docker/certs.d/registry.homelab.local:5000/ca.crt
+# sudo cp /volume1/docker/nomad/config/ca/certs/ca.crt /etc/docker/certs.d/registry.homelab.local:5000/ca.crt
 
 # Restart Docker
 sudo systemctl restart docker
@@ -329,10 +329,10 @@ Self-signed certificates do not automatically renew. You'll need to manually rep
 
 ```bash
 # Create a renewal script
-cat > /volume1/nomad/scripts/renew-certificates.sh << EOF
+cat > /volume1/docker/nomad/scripts/renew-certificates.sh << EOF
 #!/bin/bash
 # Check certificate expiration
-EXPIRY=\$(openssl x509 -enddate -noout -in /volume1/nomad/config/certs/homelab.crt | cut -d= -f2)
+EXPIRY=\$(openssl x509 -enddate -noout -in /volume1/docker/nomad/config/certs/homelab.crt | cut -d= -f2)
 EXPIRY_EPOCH=\$(date -d "\$EXPIRY" +%s)
 NOW_EPOCH=\$(date +%s)
 DAYS_REMAINING=\$(( (\$EXPIRY_EPOCH - \$NOW_EPOCH) / 86400 ))
@@ -343,13 +343,13 @@ if [ \$DAYS_REMAINING -lt 30 ]; then
   
   # Generate new certificate
   openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \\
-    -keyout /volume1/nomad/config/certs/homelab.key \\
-    -out /volume1/nomad/config/certs/homelab.crt \\
+    -keyout /volume1/docker/nomad/config/certs/homelab.key \\
+    -out /volume1/docker/nomad/config/certs/homelab.crt \\
     -subj "/CN=*.homelab.local" \\
     -addext "subjectAltName=DNS:*.homelab.local,DNS:homelab.local"
   
   # Copy to volume directory
-  cp /volume1/nomad/config/certs/homelab.* /volume1/nomad/volumes/certificates/
+  cp /volume1/docker/nomad/config/certs/homelab.* /volume1/docker/nomad/volumes/certificates/
   
   # Restart Traefik to pick up new certificate
   nomad job restart traefik
@@ -360,12 +360,12 @@ else
 fi
 EOF
 
-chmod +x /volume1/nomad/scripts/renew-certificates.sh
+chmod +x /volume1/docker/docker/nomad/scripts/renew-certificates.sh
 
 # Create a scheduled task in Synology DSM
 # Control Panel > Task Scheduler > Create > Scheduled Task > User-defined script
 # Set to run monthly
-# Task: bash /volume1/nomad/scripts/renew-certificates.sh
+# Task: bash /volume1/docker/nomad/scripts/renew-certificates.sh
 ```
 
 ## Troubleshooting
@@ -385,11 +385,11 @@ If certificate validation fails:
 
 ```bash
 # Check certificate details
-openssl x509 -in /volume1/nomad/config/certs/homelab.crt -text -noout
+openssl x509 -in /volume1/docker/nomad/config/certs/homelab.crt -text -noout
 
 # Verify certificate matches private key
-openssl x509 -noout -modulus -in /volume1/nomad/config/certs/homelab.crt | openssl md5
-openssl rsa -noout -modulus -in /volume1/nomad/config/certs/homelab.key | openssl md5
+openssl x509 -noout -modulus -in /volume1/docker/nomad/config/certs/homelab.crt | openssl md5
+openssl rsa -noout -modulus -in /volume1/docker/nomad/config/certs/homelab.key | openssl md5
 # The outputs should match
 ```
 
@@ -399,7 +399,7 @@ If you see "name does not match certificate" errors:
 
 1. **Check Subject Alternative Names** (SANs):
    ```bash
-   openssl x509 -in /volume1/nomad/config/certs/homelab.crt -text -noout | grep -A1 "Subject Alternative Name"
+   openssl x509 -in /volume1/docker/nomad/config/certs/homelab.crt -text -noout | grep -A1 "Subject Alternative Name"
    ```
 
 2. **Ensure hostname resolution** is correctly configured:

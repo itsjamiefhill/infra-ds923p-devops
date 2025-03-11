@@ -537,8 +537,8 @@ To backup Prometheus and Grafana data:
 ```bash
 # Option 1: Using Synology Hyper Backup
 # Include these directories in your backup task:
-# - /volume1/nomad/volumes/high_performance/prometheus_data
-# - /volume1/nomad/volumes/standard/grafana_data
+# - /volume1/docker/nomad/volumes/high_performance/prometheus_data
+# - /volume1/docker/nomad/volumes/standard/grafana_data
 
 # Option 2: Manual backup
 # Stop services
@@ -547,8 +547,8 @@ nomad job stop prometheus
 
 # Backup data
 tar -czf /volume2/backups/services/monitoring_backup.tar.gz \
-  -C /volume1/nomad/volumes/high_performance prometheus_data \
-  -C /volume1/nomad/volumes/standard grafana_data
+  -C /volume1/docker/nomad/volumes/high_performance prometheus_data \
+  -C /volume1/docker/nomad/volumes/standard grafana_data
 
 # Restart services
 nomad job run jobs/prometheus.hcl
@@ -565,10 +565,10 @@ nomad job stop grafana
 nomad job stop prometheus
 
 # Restore data
-tar -xzf /volume2/backups/services/monitoring_backup.tar.gz -C /volume1/nomad/volumes
+tar -xzf /volume2/backups/services/monitoring_backup.tar.gz -C /volume1/docker/nomad/volumes
 
 # Fix permissions
-chown -R 472:472 /volume1/nomad/volumes/standard/grafana_data
+chown -R 472:472 /volume1/docker/nomad/volumes/standard/grafana_data
 
 # Restart services
 nomad job run jobs/prometheus.hcl

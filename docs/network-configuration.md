@@ -261,8 +261,8 @@ curl http://grafana.service.consul
 TLS is implemented using self-signed certificates:
 
 1. Certificate files are stored at:
-   - Public certificate: `/volume1/nomad/config/certs/homelab.crt`
-   - Private key: `/volume1/nomad/config/certs/homelab.key`
+   - Public certificate: `/volume1/docker/nomad/config/certs/homelab.crt`
+   - Private key: `/volume1/docker/nomad/config/certs/homelab.key`
 
 2. These certificates are mounted into Traefik:
    ```hcl
@@ -424,7 +424,7 @@ scrape_configs:
 3. **Certificate Errors**:
    ```bash
    # Verify certificate validity
-   openssl x509 -in /volume1/nomad/config/certs/homelab.crt -text -noout
+   openssl x509 -in /volume1/docker/nomad/config/certs/homelab.crt -text -noout
    
    # Test HTTPS connection
    curl -v -k https://grafana.homelab.local
@@ -498,7 +498,7 @@ scrape_configs:
 2. **Fixing Certificate Trust Issues**:
    ```bash
    # Export certificate
-   cp /volume1/nomad/config/certs/homelab.crt /volume1/public/
+   cp /volume1/docker/nomad/config/certs/homelab.crt /volume1/public/
    
    # Download and install on client devices
    ```

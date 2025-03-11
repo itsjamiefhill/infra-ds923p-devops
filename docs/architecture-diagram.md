@@ -58,7 +58,7 @@ flowchart TB
         DSM["DSM 7.x"]
         ContainerManager["Container Manager"]
         Nomad["Nomad"]
-        Volume1["Volume1: /volume1/nomad/\n(Storage Classes)"]
+        Volume1["Volume1: /volume1/docker/nomad/\n(Storage Classes)"]
         Volume2["Volume2: /volume2/\n(Data & Backups)"]
         Docker["Docker Engine"]
     end

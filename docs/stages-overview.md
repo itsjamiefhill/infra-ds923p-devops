@@ -97,6 +97,10 @@ Stage 1 involves the automated deployment of the core DevOps platform components
    - Create certificates
    - Configure Nomad volumes
 
+   > **Note for Synology Users**: The Synology version of Nomad does not support the `host` volume type. 
+   > Instead of registering volumes with Nomad, the platform creates the appropriate directories 
+   > which are then mounted directly in container configurations using Docker volume mounts.
+
 2. **Core Services Deployment**
    - Deploy Consul for service discovery
    - Deploy Traefik for reverse proxy
@@ -269,7 +273,7 @@ for job in homepage oidc-proxy keycloak loki promtail grafana prometheus registr
 done
 
 # Clean up data directories
-rm -rf /volume1/nomad/volumes/*
+rm -rf /volume1/docker/nomad/volumes/*
 
 # Restart from clean slate
 ./install.sh
@@ -282,7 +286,7 @@ If issues occur with specific applications:
 nomad job stop <app-name>
 
 # Clean up application data if needed
-rm -rf /volume1/nomad/volumes/<app_data>
+rm -rf /volume1/docker/nomad/volumes/<app_data>
 
 # Redeploy the application
 nomad job run jobs/<app-name>.hcl

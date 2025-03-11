@@ -29,7 +29,7 @@ The platform requires a specific directory structure to function properly. These
 
 ### Data Directories
 
-The base data directory (default: `/volume1/nomad/volumes`) contains subdirectories for each service and storage class:
+The base data directory (default: `/volume1/docker/nomad/volumes`) contains subdirectories for each service and storage class:
 
 #### Storage Classes
 - **high_performance/**: For services requiring fast I/O (databases, metrics)
@@ -38,7 +38,6 @@ The base data directory (default: `/volume1/nomad/volumes`) contains subdirector
 
 #### Service Directories
 - **consul_data/**: Consul data
-- **gitea_data/**: Gitea repositories and configuration
 - **registry_data/**: Docker Registry images
 - **prometheus_data/**: Prometheus time-series data
 - **grafana_data/**: Grafana dashboards and settings
@@ -54,7 +53,6 @@ Directory permissions are crucial for proper operation on Synology DSM:
 | Directory | Owner | Permissions | Notes |
 |-----------|-------|-------------|-------|
 | consul_data | your-username:users | 777 | Consul runs as a generic user in container |
-| gitea_data | your-username:users | 755 | Gitea runs as UID 1000 |
 | registry_data | your-username:users | 755 | Registry needs write access |
 | prometheus_data | your-username:users | 755 | Prometheus needs write access |
 | grafana_data | 472:472 | 755 | Grafana runs as UID 472 |
@@ -69,9 +67,9 @@ You can customize directory locations by modifying the following variables in `c
 
 ```bash
 # Base directories
-DATA_DIR="/volume1/nomad/volumes"
-CONFIG_DIR="/volume1/nomad/config"
-JOB_DIR="/volume1/nomad/jobs"
+DATA_DIR="/volume1/docker/nomad/volumes"
+CONFIG_DIR="/volume1/docker/nomad/config"
+JOB_DIR="/volume1/docker/nomad/jobs"
 LOG_DIR="/volume1/logs"
 ```
 
@@ -104,7 +102,6 @@ mkdir -p $DATA_DIR/standard
 
 # Create service data directories
 mkdir -p $DATA_DIR/consul_data
-mkdir -p $DATA_DIR/gitea_data
 mkdir -p $DATA_DIR/registry_data
 mkdir -p $DATA_DIR/prometheus_data
 mkdir -p $DATA_DIR/grafana_data
@@ -126,7 +123,6 @@ Consider these approximate storage requirements when planning your installation 
 | Directory | Minimum Size | Recommended Size | Notes |
 |-----------|--------------|------------------|-------|
 | consul_data | 50MB | 100MB | Grows with service count |
-| gitea_data | 100MB | 5GB | Depends on repository size |
 | registry_data | 100MB | 10GB | Depends on image count |
 | prometheus_data | 1GB | 5GB | Depends on retention period |
 | grafana_data | 50MB | 500MB | For dashboards and plugins |

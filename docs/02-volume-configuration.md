@@ -10,7 +10,37 @@ Nomad volumes are used to provide persistent storage for the platform's containe
 
 In Nomad, volumes allow tasks to use persistent storage that exists beyond the lifecycle of a single allocation. This is crucial for services that need to maintain state, such as service discovery, logging, and monitoring.
 
-The HomeLab DevOps Platform uses Nomad's "host" volume type, which maps directories on the Synology filesystem to container paths. This ensures that data is persisted even when containers are restarted or relocated.
+The HomeLab DevOps Platform uses directories on the Synology filesystem mapped to container paths. This ensures that data is persisted even when containers are restarted or relocated.
+
+## Synology-Specific Volume Considerations
+
+When using Nomad on Synology DS923+, there are specific considerations regarding volume handling:
+
+### Host Volume Type Limitations
+
+The Synology version of Nomad does not support the `host` volume type directly through the `nomad volume create` command. Instead, volumes should be managed through Docker volume mounts in the job definitions.
+
+#### Alternative Volume Approach
+
+Rather than using Nomad's volume plugin system, use the Docker volume mount syntax in your job definitions:
+
+```hcl
+job "consul" {
+  // ...
+  group "consul" {
+    task "consul" {
+      config {
+        // ...
+        volumes = [
+          "/volume1/docker/nomad/volumes/consul_data:/consul/data"
+        ]
+      }
+    }
+  }
+}
+```
+
+This approach achieves the same goal of persistent storage while working within Synology Nomad's limitations.
 
 ## Storage Classes
 
@@ -39,80 +69,54 @@ The platform configures the following volumes:
 | keycloak_data | standard | /opt/keycloak/data | Keycloak user database |
 | homepage_data | standard | /app/config | Homepage dashboard configuration |
 
-## Volume Configuration File
+## Volume Directory Structure
 
-Volumes are defined in HCL format in the `config/volumes.hcl` file, which is generated during installation. Here's what this file contains:
+While the Synology Nomad doesn't support volume registration, the script still creates the proper directory structure to be used with Docker volume mounts:
 
-```hcl
-# Storage class volumes
-volume "high_performance" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/high_performance"
-  }
-}
-
-volume "high_capacity" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/high_capacity"
-  }
-}
-
-volume "standard" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/standard"
-  }
-}
-
-# Service-specific volumes
-volume "consul_data" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/consul_data"
-  }
-}
-
-// Additional volumes following the same pattern...
+```
+/volume1/docker/nomad/volumes/
+  ├── high_performance/
+  ├── high_capacity/
+  ├── standard/
+  ├── consul_data/
+  ├── vault_data/
+  ├── registry_data/
+  ├── prometheus_data/
+  ├── grafana_data/
+  ├── loki_data/
+  ├── postgres_data/
+  ├── keycloak_data/
+  ├── homepage_data/
+  └── certificates/
 ```
 
 ## Technical Implementation
 
 The `02-configure-volumes.sh` script:
 
-1. Creates the volumes.hcl configuration file based on the configured `DATA_DIR`
-2. Registers the volumes with Nomad using the `nomad volume create` command
-3. Verifies that volumes are successfully created
-
-Here's how volumes are registered with Nomad:
-
-```bash
-nomad volume create $CONFIG_DIR/volumes.hcl
-```
+1. Creates the directories for all storage classes and service volumes
+2. Detects that Synology Nomad doesn't support host volumes
+3. Creates a VOLUME_README.md file with instructions for using Docker volume mounts
+4. Ensures all directories have proper permissions
 
 ## Volume Usage in Jobs
 
-Once volumes are created, they are referenced in Nomad job definitions. For example, here's how Vault uses its volume:
+For Synology Nomad installations, volumes are used with the following syntax:
 
 ```hcl
 job "vault" {
   // Job configuration...
 
   group "vault" {
-    volume "vault_data" {
-      type = "host"
-      read_only = false
-      source = "vault_data"
-    }
-
     task "vault" {
       // Task configuration...
 
-      volume_mount {
-        volume = "vault_data"
-        destination = "/vault/data"
-        read_only = false
+      config {
+        image = "vault:1.9.0"
+        
+        volumes = [
+          "/volume1/docker/nomad/volumes/vault_data:/vault/data"
+        ]
       }
       
       // Rest of the task definition...
@@ -121,11 +125,7 @@ job "vault" {
 }
 ```
 
-Each job that requires persistent storage:
-
-1. References a volume by name in its group definition
-2. Mounts that volume to the appropriate path within the container
-3. Configures read/write permissions as needed
+This directly maps the host directory to the container path without requiring Nomad volume registration.
 
 ## Volume Persistence on Synology
 
@@ -139,7 +139,6 @@ Volumes persist data across:
 
 However, volumes do NOT automatically persist across:
 
-- Nomad volume deletions
 - Manual deletion of the data directory
 - Migration to a different Synology device
 
@@ -157,22 +156,12 @@ All storage classes (high_performance, high_capacity, standard) in this configur
 
 ## Customizing Volumes
 
-You can customize volume locations by modifying the `DATA_DIR` variable in `custom.conf`. This will affect all volumes. 
+You can customize volume locations by modifying the `DATA_DIR` variable in `custom.conf`. This will affect all volumes.
 
 If you need to customize individual volume locations, you'll need to modify both:
 
-1. The generated `volumes.hcl` file
-2. The corresponding data directory location
-
-## Volume Management Commands
-
-Useful Nomad commands for managing volumes:
-
-- **List all volumes**: `nomad volume list`
-- **Show volume details**: `nomad volume status <volume-name>`
-- **Delete a volume**: `nomad volume delete <volume-name>`
-
-Note that deleting a volume in Nomad doesn't delete the actual data on disk. It only removes Nomad's reference to it.
+1. The directory creation paths in `01-setup-directories.sh`
+2. The corresponding volume mount paths in your job definitions
 
 ## Performance Considerations on Synology
 
@@ -194,25 +183,24 @@ Your Nomad volumes are only for the persistent data generated and used by the se
 
 Common volume-related issues and solutions:
 
-1. **Volume Creation Failures**:
-   - Check Nomad server logs: `cat /volume1/logs/platform/nomad.log`
-   - Verify directory permissions: `ls -la $DATA_DIR`
-   - Ensure Nomad has permission to access the host directories
+1. **"Error unknown volume type" When Creating Volumes**:
+   - **Cause**: The Synology version of Nomad does not support the host volume plugin.
+   - **Solution**: Use Docker volume mounts directly in your job definitions rather than trying to register volumes with Nomad.
 
 2. **Data Not Persisting**:
-   - Verify volume is correctly registered: `nomad volume status <volume-name>`
-   - Check that the job definition includes the correct volume references
-   - Ensure the task's `volume_mount` points to the correct destination
+   - Verify the volume mount path in the job definition is correct
+   - Check that the host directory exists with proper permissions
+   - Ensure the container is writing to the mounted path
 
 3. **Permission Issues**:
    - Verify container user has access to the mounted directory
    - Check if ownership is set correctly on the host: `sudo chown -R <uid>:<gid> $DATA_DIR/<volume-name>`
    - Ensure that the required permissions are applied to the volume
 
-4. **"Volume Not Found" Errors**:
-   - Verify the volume exists in Nomad: `nomad volume list`
-   - Check that the volume name in the job matches the registered volume name
-   - Ensure you're operating in the correct Nomad namespace (if applicable)
+4. **Cannot Access Volume Data**:
+   - Check if the directory exists: `ls -la $DATA_DIR/<volume-name>`
+   - Verify the path in your job definition
+   - Check for typos in the volume mount path
 
 ## Next Steps
 

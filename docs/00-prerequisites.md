@@ -97,13 +97,14 @@ This document is an overview of the stage 0 manual configuration required before
 ## Directory Structure Setup
 
 Create the required directories for the platform:
+*N.B. docker directory is created by default when Container Manager synology package is installed*
 
 ```bash
 # Create essential directories on volume1 (devops)
-mkdir -p /volume1/nomad/config
-mkdir -p /volume1/nomad/volumes/high_performance
-mkdir -p /volume1/nomad/volumes/high_capacity
-mkdir -p /volume1/nomad/volumes/standard
+mkdir -p /volume1/docker/nomad/config
+mkdir -p /volume1/docker/nomad/volumes/high_performance
+mkdir -p /volume1/docker/nomad/volumes/high_capacity
+mkdir -p /volume1/docker/nomad/volumes/standard
 mkdir -p /volume1/logs/platform
 
 # Create directories on volume2 (data)
@@ -112,13 +113,13 @@ mkdir -p /volume2/backups/services
 mkdir -p /volume2/datasets
 
 # Set ownership
-chown -R your-username:users /volume1/nomad
+chown -R your-username:users /volume1/docker/nomad
 chown -R your-username:users /volume1/logs
 chown -R your-username:users /volume2/backups
 chown -R your-username:users /volume2/datasets
 
 # Set permissions
-chmod -R 755 /volume1/nomad
+chmod -R 755 /volume1/docker/nomad
 chmod -R 755 /volume1/logs
 chmod -R 755 /volume2/backups
 chmod -R 755 /volume2/datasets

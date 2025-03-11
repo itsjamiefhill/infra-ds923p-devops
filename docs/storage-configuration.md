@@ -6,14 +6,15 @@ This document provides detailed information about storage configuration for the 
 
 1. [Overview](#overview)
 2. [Hardware Configuration](#hardware-configuration)
-3. [Storage Classes](#storage-classes)
-4. [Volume Setup](#volume-setup)
-5. [Nomad Volume Configuration](#nomad-volume-configuration)
-6. [Service-Specific Storage](#service-specific-storage)
-7. [Performance Considerations](#performance-considerations)
-8. [Backup Strategies](#backup-strategies)
-9. [Monitoring Storage](#monitoring-storage)
-10. [Troubleshooting](#troubleshooting)
+3. [Platform Implementation Notes](#platform-implementation-notes)
+4. [Storage Classes](#storage-classes)
+5. [Volume Setup](#volume-setup)
+6. [Nomad Volume Configuration](#nomad-volume-configuration)
+7. [Service-Specific Storage](#service-specific-storage)
+8. [Performance Considerations](#performance-considerations)
+9. [Backup Strategies](#backup-strategies)
+10. [Monitoring Storage](#monitoring-storage)
+11. [Troubleshooting](#troubleshooting)
 
 ## Overview
 
@@ -55,6 +56,20 @@ For enhanced performance, consider adding SSD cache:
 - Accelerates frequently accessed data
 - Particularly beneficial for high_performance storage class
 
+## Platform Implementation Notes
+
+### Synology Nomad Implementation
+
+The Synology implementation of Nomad differs from standard Nomad in several ways:
+
+1. **Volume Plugin Support**: Synology Nomad does not support the standard Nomad volume plugins or the `host` volume type used in the `nomad volume create` command.
+
+2. **Docker Integration**: Volume persistence must be handled through Docker's volume mount system rather than Nomad's volume system.
+
+3. **Directory Mapping**: The platform still creates all the necessary directories as described in this document, but they are mounted directly in job definitions rather than registered with Nomad.
+
+The scripts have been adapted to detect this environment difference and adjust accordingly. If you see a `VOLUME_README.md` file in your config directory, this indicates that your environment is using the alternative approach.
+
 ## Storage Classes
 
 The platform uses logical storage classes to organize data based on access patterns and performance requirements:
@@ -62,7 +77,7 @@ The platform uses logical storage classes to organize data based on access patte
 ### 1. high_performance
 
 ```
-/volume1/nomad/volumes/high_performance/
+/volume1/docker/nomad/volumes/high_performance/
 ```
 
 **Purpose**: For services requiring fast I/O and low latency.
@@ -80,7 +95,7 @@ The platform uses logical storage classes to organize data based on access patte
 ### 2. high_capacity
 
 ```
-/volume1/nomad/volumes/high_capacity/
+/volume1/docker/nomad/volumes/high_capacity/
 ```
 
 **Purpose**: For services requiring large storage volumes.
@@ -98,7 +113,7 @@ The platform uses logical storage classes to organize data based on access patte
 ### 3. standard
 
 ```
-/volume1/nomad/volumes/standard/
+/volume1/docker/nomad/volumes/standard/
 ```
 
 **Purpose**: General purpose storage for most services.
@@ -141,25 +156,25 @@ Create the necessary directory structure:
 
 ```bash
 # Create main directories
-mkdir -p /volume1/nomad/config
-mkdir -p /volume1/nomad/jobs
+mkdir -p /volume1/docker/nomad/config
+mkdir -p /volume1/docker/nomad/jobs
 mkdir -p /volume1/logs/platform
 
 # Create storage class directories
-mkdir -p /volume1/nomad/volumes/high_performance
-mkdir -p /volume1/nomad/volumes/high_capacity
-mkdir -p /volume1/nomad/volumes/standard
+mkdir -p /volume1/docker/nomad/volumes/high_performance
+mkdir -p /volume1/docker/nomad/volumes/high_capacity
+mkdir -p /volume1/docker/nomad/volumes/standard
 
 # Create service-specific directories
-mkdir -p /volume1/nomad/volumes/consul_data
-mkdir -p /volume1/nomad/volumes/vault_data
-mkdir -p /volume1/nomad/volumes/prometheus_data
-mkdir -p /volume1/nomad/volumes/grafana_data
-mkdir -p /volume1/nomad/volumes/loki_data
-mkdir -p /volume1/nomad/volumes/registry_data
-mkdir -p /volume1/nomad/volumes/keycloak_data
-mkdir -p /volume1/nomad/volumes/homepage_data
-mkdir -p /volume1/nomad/volumes/certificates
+mkdir -p /volume1/docker/nomad/volumes/consul_data
+mkdir -p /volume1/docker/nomad/volumes/vault_data
+mkdir -p /volume1/docker/nomad/volumes/prometheus_data
+mkdir -p /volume1/docker/nomad/volumes/grafana_data
+mkdir -p /volume1/docker/nomad/volumes/loki_data
+mkdir -p /volume1/docker/nomad/volumes/registry_data
+mkdir -p /volume1/docker/nomad/volumes/keycloak_data
+mkdir -p /volume1/docker/nomad/volumes/homepage_data
+mkdir -p /volume1/docker/nomad/volumes/certificates
 
 # Create backup directories
 mkdir -p /volume2/backups/system
@@ -173,109 +188,108 @@ chmod -R 755 /volume2/backups
 chmod -R 755 /volume2/datasets
 
 # Set specific permissions for certain services
-chmod 777 /volume1/nomad/volumes/consul_data
-chown -R 472:472 /volume1/nomad/volumes/grafana_data
+chmod 777 /volume1/docker/nomad/volumes/consul_data
+chown -R 472:472 /volume1/docker/nomad/volumes/grafana_data
 ```
 
-## Nomad Volume Configuration
+## Volume Configuration with Docker Mounts
 
-Configure Nomad volumes to map these directories to containers:
+Since Synology Nomad doesn't support the host volume type, persistent storage is configured directly in job definitions using Docker volume mounts:
 
 ```hcl
-# /volume1/nomad/config/volumes.hcl
+job "vault" {
+  // Job configuration...
 
-# Storage class volumes
-volume "high_performance" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/high_performance"
-  }
-}
-
-volume "high_capacity" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/high_capacity"
-  }
-}
-
-volume "standard" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/standard"
-  }
-}
-
-# Service-specific volumes
-volume "consul_data" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/consul_data"
-  }
-}
-
-volume "vault_data" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/vault_data"
-  }
-}
-
-volume "prometheus_data" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/prometheus_data"
-  }
-}
-
-volume "grafana_data" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/grafana_data"
-  }
-}
-
-volume "loki_data" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/loki_data"
-  }
-}
-
-volume "registry_data" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/registry_data"
-  }
-}
-
-volume "keycloak_data" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/keycloak_data"
-  }
-}
-
-volume "homepage_data" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/homepage_data"
-  }
-}
-
-volume "certificates" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/certificates"
+  group "vault" {
+    task "vault" {
+      config {
+        image = "vault:1.9.0"
+        volumes = [
+          "/volume1/docker/nomad/volumes/vault_data:/vault/data"
+        ]
+      }
+      
+      // Rest of the task definition...
+    }
   }
 }
 ```
 
-Register these volumes with Nomad:
+All necessary directories are still created during installation to ensure they exist with proper permissions before being mounted in containers.
 
-```bash
-nomad volume create /volume1/nomad/config/volumes.hcl
-```
+## Updated Volume Usage in Jobs Section:
+
+## Volume Usage in Jobs
+
+Since volumes are not registered with Nomad on Synology, they are referenced in job definitions using Docker volume mounts:
+
+```hcl
+job "consul" {
+  // Job configuration...
+
+  group "consul" {
+    task "consul" {
+      // Task configuration...
+
+      config {
+        image = "consul:1.11.4"
+        
+        volumes = [
+          "/volume1/docker/nomad/volumes/consul_data:/consul/data"
+        ]
+      }
+      
+      // Rest of the task definition...
+    }
+  }
+}
+
+Each job that requires persistent storage:
+
+1. References a volume path directly in its Docker configuration
+2. Mounts that volume to the appropriate path within the container
+3. Ensures proper permissions are set on the host directory
+
+Be sure to use the correct path mappings as shown in the table below:
+
+Service | Host Path | Container Path
+Consul | /volume1/docker/nomad/volumes/consul_data/ | consul/data
+Vault | /volume1/docker/nomad/volumes/vault_data/ | vault/data
+Prometheus | /volume1/docker/nomad/volumes/prometheus_data | /prometheus
+Grafana | /volume1/docker/nomad/volumes/grafana_data/ | var/lib/grafana
+Loki | /volume1/docker/nomad/volumes/loki_data/ | loki
+Registry | /volume1/docker/nomad/volumes/registry_data | /var/lib/registry
+Keycloak | /volume1/docker/nomad/volumes/keycloak_data | /opt/keycloak 
+Homepage | /volume1/docker/nomad/volumes/homepage_data | /app/config
+
+## Updated Troubleshooting Section:
+
+## Troubleshooting Volume Issues
+
+1. Common volume-related issues and solutions:
+
+1. **"Error unknown volume type" When Using Nomad Volume Commands**:
+   - **Cause**: The Synology version of Nomad does not support the host volume plugin.
+   - **Solution**: Use Docker volume mounts directly in your job definitions instead of trying to register volumes with Nomad.
+   
+   ```hcl
+   config {
+     volumes = [
+       "/volume1/docker/nomad/volumes/service_data:/container/path"
+     ]
+   }```
+
+2. Data Not Persisting:
+
+Verify the volume mount path in the job definition is correct
+Check that the host directory exists with proper permissions
+Ensure the container is writing to the mounted path
+
+3. Permission Issues:
+
+Verify container user has access to the mounted directory
+Check if ownership is set correctly on the host: sudo chown -R <uid>:<gid> $DATA_DIR/<volume-name>
+For services with specific user requirements (like Grafana or PostgreSQL), ensure the UID/GID ownership matches the container's user
 
 ## Service-Specific Storage
 
@@ -361,7 +375,7 @@ job "loki" {
    - Monitor access patterns and adjust as needed
 
 2. **SSD Cache** (if available):
-   - Configure SSD cache to prioritize `/volume1/nomad/volumes/high_performance`
+   - Configure SSD cache to prioritize `/volume1/docker/nomad/volumes/high_performance`
    - Use read-only cache for better reliability
    - Monitor cache hit rate to ensure effectiveness
 
@@ -404,14 +418,14 @@ Use Prometheus and Grafana to monitor storage performance:
 
 ### Volume-Based Backups
 
-Back up the entire `/volume1/nomad/volumes` directory:
+Back up the entire `/volume1/docker/nomad/volumes` directory:
 
 ```bash
 # Manual backup
-tar -czf /volume2/backups/system/volumes-$(date +%Y%m%d).tar.gz -C /volume1/nomad/volumes .
+tar -czf /volume2/backups/system/volumes-$(date +%Y%m%d).tar.gz -C /volume1/docker/nomad/volumes .
 
 # Or using rsync for incremental backups
-rsync -avz --delete /volume1/nomad/volumes/ /volume2/backups/system/volumes/
+rsync -avz --delete /volume1/docker/nomad/volumes/ /volume2/backups/system/volumes/
 ```
 
 ### Service-Specific Backups
@@ -447,7 +461,7 @@ Configure Synology's Hyper Backup to back up these directories:
 2. Create a new backup task:
    - Select "Local folder & USB" as destination
    - Connect your external 1TB drive
-   - Select `/volume1/nomad/volumes` and `/volume1/nomad/config` as sources
+   - Select `/volume1/docker/nomad/volumes` and `/volume1/docker/nomad/config` as sources
    - Schedule daily backups
    - Configure retention policy
    - Set up pre/post backup scripts (see [Backup and Recovery](backup-recovery.md))
@@ -516,7 +530,7 @@ Configure alerts for specific services that may have high storage growth:
    df -h /volume1
    
    # Find large directories
-   du -h --max-depth=1 /volume1/nomad/volumes | sort -hr
+   du -h --max-depth=1 /volume1/docker/nomad/volumes | sort -hr
    
    # Clean up unnecessary data
    docker system prune -a  # Clean up unused Docker images
@@ -525,11 +539,11 @@ Configure alerts for specific services that may have high storage growth:
 2. **Permission Issues**:
    ```bash
    # Check permissions
-   ls -la /volume1/nomad/volumes
+   ls -la /volume1/docker/nomad/volumes
    
    # Fix common permission problems
-   chmod 755 /volume1/nomad/volumes
-   chown -R your-username:users /volume1/nomad/volumes
+   chmod 755 /volume1/docker/nomad/volumes
+   chown -R your-username:users /volume1/docker/nomad/volumes
    ```
 
 3. **Volume Mount Failures**:
@@ -564,10 +578,10 @@ Configure alerts for specific services that may have high storage growth:
    nomad job stop <job-name>
    
    # Restore data
-   tar -xzf /volume2/backups/system/volumes-YYYYMMDD.tar.gz -C /volume1/nomad/volumes
+   tar -xzf /volume2/backups/system/volumes-YYYYMMDD.tar.gz -C /volume1/docker/nomad/volumes
    
    # Restart services
-   nomad job run /volume1/nomad/jobs/<job-name>.hcl
+   nomad job run /volume1/docker/nomad/jobs/<job-name>.hcl
    ```
 
 2. **Rebuilding a Service Volume**:
@@ -577,13 +591,13 @@ Configure alerts for specific services that may have high storage growth:
    nomad job stop <service-name>
    
    # Remove corrupted data
-   rm -rf /volume1/nomad/volumes/<service>_data/*
+   rm -rf /volume1/docker/nomad/volumes/<service>_data/*
    
    # Restore from backup if available
-   tar -xzf /volume2/backups/services/<service>_backup.tar.gz -C /volume1/nomad/volumes/<service>_data
+   tar -xzf /volume2/backups/services/<service>_backup.tar.gz -C /volume1/docker/nomad/volumes/<service>_data
    
    # Start the service
-   nomad job run /volume1/nomad/jobs/<service-name>.hcl
+   nomad job run /volume1/docker/nomad/jobs/<service-name>.hcl
    ```
 
 3. **Consul Data Recovery**:
@@ -592,9 +606,9 @@ Configure alerts for specific services that may have high storage growth:
    nomad job stop consul
    
    # Restore Consul data
-   rm -rf /volume1/nomad/volumes/consul_data/*
-   tar -xzf /volume2/backups/services/consul/consul-snapshot-YYYYMMDD.snap -C /volume1/nomad/volumes/consul_data
+   rm -rf /volume1/docker/nomad/volumes/consul_data/*
+   tar -xzf /volume2/backups/services/consul/consul-snapshot-YYYYMMDD.snap -C /volume1/docker/nomad/volumes/consul_data
    
    # Start Consul
-   nomad job run /volume1/nomad/jobs/consul.hcl
+   nomad job run /volume1/docker/nomad/jobs/consul.hcl
    ```

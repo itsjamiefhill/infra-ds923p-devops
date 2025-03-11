@@ -331,7 +331,7 @@ Access control is managed through:
 Keycloak data is persisted on the Synology NAS using a Nomad volume:
 - **Volume Name**: keycloak_data
 - **Storage Class**: standard
-- **Host Path**: `/volume1/nomad/volumes/standard/keycloak_data` (default)
+- **Host Path**: `/volume1/docker/nomad/volumes/standard/keycloak_data` (default)
 - **Container Path**: `/opt/keycloak/data`
 
 This ensures that user accounts and configuration are maintained across restarts and DSM updates.
@@ -393,14 +393,14 @@ To backup Keycloak:
 
 ```bash
 # Option 1: Using Synology Hyper Backup
-# Include /volume1/nomad/volumes/standard/keycloak_data in your backup task
+# Include /volume1/docker/nomad/volumes/standard/keycloak_data in your backup task
 
 # Option 2: Manual backup
 # Stop Keycloak
 nomad job stop keycloak
 
 # Backup the data directory
-tar -czf /volume2/backups/services/keycloak_backup.tar.gz -C /volume1/nomad/volumes/standard keycloak_data
+tar -czf /volume2/backups/services/keycloak_backup.tar.gz -C /volume1/docker/nomad/volumes/standard keycloak_data
 
 # Restart Keycloak
 nomad job run jobs/keycloak.hcl
@@ -415,8 +415,8 @@ To restore Keycloak data:
 nomad job stop keycloak
 
 # Restore the data directory
-rm -rf /volume1/nomad/volumes/standard/keycloak_data/*
-tar -xzf /volume2/backups/services/keycloak_backup.tar.gz -C /volume1/nomad/volumes/standard
+rm -rf /volume1/docker/nomad/volumes/standard/keycloak_data/*
+tar -xzf /volume2/backups/services/keycloak_backup.tar.gz -C /volume1/docker/nomad/volumes/standard
 
 # Restart Keycloak
 nomad job run jobs/keycloak.hcl

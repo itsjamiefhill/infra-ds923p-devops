@@ -206,6 +206,19 @@ For backup procedures and recovery options, refer to the [Backup Documentation](
 
 Common issues and their solutions are documented in the [Troubleshooting Guide](docs/troubleshooting.md).
 
+## Important Note for Synology Users
+
+### Volume Configuration
+
+This platform has been specifically adapted for Synology NAS systems. Due to limitations in the Synology implementation of Nomad, persistent storage is handled differently than in standard Nomad deployments:
+
+- The Synology version of Nomad does not support the `host` volume type used with `nomad volume create`
+- Instead, persistent storage is achieved using Docker volume mounts in job definitions
+- All necessary directories are still created during setup for easy mounting
+- Job definitions use the syntax: `volumes = ["/volume1/docker/nomad/volumes/service_data:/container/path"]`
+
+This approach ensures data persistence while working within Synology's constraints. See the [Volume Configuration](docs/02-volume-configuration.md) and [Storage Configuration](docs/storage-configuration.md) documents for detailed information.
+
 ## License
 
 This project is released under the MIT License. See the [LICENSE](LICENSE) file for details.

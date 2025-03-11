@@ -111,8 +111,8 @@ systemctl start nomad
 If you encounter directory permission errors:
 
 ```bash
-sudo chmod -R 755 /volume1/nomad/volumes
-sudo chown -R <your-user>:<your-group> /volume1/nomad/volumes
+sudo chmod -R 755 /volume1/docker/nomad/volumes
+sudo chown -R <your-user>:<your-group> /volume1/docker/nomad/volumes
 ```
 
 ## Service-Specific Problems
@@ -130,7 +130,7 @@ If Consul fails to start:
 
 2. Make sure the data directory is writable:
    ```bash
-   sudo chmod 777 /volume1/nomad/volumes/high_performance/consul_data
+   sudo chmod 777 /volume1/docker/nomad/volumes/high_performance/consul_data
    ```
 
 3. Check logs:
@@ -203,7 +203,7 @@ If you're having TLS certificate issues:
 
 1. Check certificate validity:
    ```bash
-   openssl x509 -in /volume1/nomad/config/certs/homelab.crt -text -noout
+   openssl x509 -in /volume1/docker/nomad/config/certs/homelab.crt -text -noout
    ```
 
 2. Verify certificate is mounted correctly:
@@ -292,7 +292,7 @@ If you can't push or pull images:
    sudo mkdir -p /etc/docker/certs.d/registry.homelab.local:5000
 
    # Copy your self-signed certificate
-   sudo cp /volume1/nomad/config/certs/homelab.crt /etc/docker/certs.d/registry.homelab.local:5000/ca.crt
+   sudo cp /volume1/docker/nomad/config/certs/homelab.crt /etc/docker/certs.d/registry.homelab.local:5000/ca.crt
 
    # Restart Docker
    sudo systemctl restart docker
@@ -304,7 +304,7 @@ If the registry is having storage problems:
 
 1. Check available space:
    ```bash
-   df -h /volume1/nomad/volumes/high_capacity/registry_data
+   df -h /volume1/docker/nomad/volumes/high_capacity/registry_data
    ```
 
 2. Run garbage collection:
@@ -357,8 +357,8 @@ If Grafana dashboards aren't working:
 
 4. Check Grafana permissions:
    ```bash
-   ls -la /volume1/nomad/volumes/standard/grafana_data
-   sudo chown -R 472:472 /volume1/nomad/volumes/standard/grafana_data
+   ls -la /volume1/docker/nomad/volumes/standard/grafana_data
+   sudo chown -R 472:472 /volume1/docker/nomad/volumes/standard/grafana_data
    ```
 
 ### Logging Stack
@@ -427,7 +427,7 @@ If Keycloak is not working correctly:
 
 3. Check database connection:
    ```bash
-   ls -la /volume1/nomad/volumes/standard/keycloak_data
+   ls -la /volume1/docker/nomad/volumes/standard/keycloak_data
    ```
 
 #### OIDC Proxy Issues
@@ -560,7 +560,7 @@ If browsers don't trust your certificates:
 
 1. Export certificate from Synology:
    ```bash
-   scp your-username@synology-ip:/volume1/nomad/config/certs/homelab.crt .
+   scp your-username@synology-ip:/volume1/docker/nomad/config/certs/homelab.crt .
    ```
 
 2. Import to your device:
@@ -582,7 +582,7 @@ If volume creation fails:
 
 2. Verify directory permissions:
    ```bash
-   ls -la /volume1/nomad/volumes/
+   ls -la /volume1/docker/nomad/volumes/
    ```
 
 3. Try creating the volume manually:
@@ -608,7 +608,7 @@ If data isn't persisting between restarts:
 3. Ensure proper ownership:
    ```bash
    # For Grafana
-   sudo chown -R 472:472 /volume1/nomad/volumes/standard/grafana_data
+   sudo chown -R 472:472 /volume1/docker/nomad/volumes/standard/grafana_data
    ```
 
 ### Container Manager Issues
@@ -670,7 +670,7 @@ If you're running out of disk space:
 3. Consider relocating volumes:
    ```bash
    # Edit config/custom.conf
-   DATA_DIR=/volume2/nomad/volumes  # Change to a different volume
+   DATA_DIR=/volume2/docker/nomad/volumes  # Change to a different volume
    ```
 
 ## DSM-Specific Issues
@@ -691,7 +691,7 @@ If you encounter issues after DSM updates:
 
 3. Restore Consul DNS configuration:
    ```bash
-   sudo cp /volume1/nomad/config/10-consul /etc/dnsmasq.conf.d/
+   sudo cp /volume1/docker/nomad/config/10-consul /etc/dnsmasq.conf.d/
    sudo systemctl restart dnsmasq
    ```
 
@@ -817,14 +817,14 @@ If you see certificate errors:
 
 1. Check certificate expiration:
    ```bash
-   openssl x509 -in /volume1/nomad/config/certs/homelab.crt -noout -dates
+   openssl x509 -in /volume1/docker/nomad/config/certs/homelab.crt -noout -dates
    ```
 
 2. Regenerate certificates if needed:
    ```bash
    openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-     -keyout /volume1/nomad/config/certs/homelab.key \
-     -out /volume1/nomad/config/certs/homelab.crt \
+     -keyout /volume1/docker/nomad/config/certs/homelab.key \
+     -out /volume1/docker/nomad/config/certs/homelab.crt \
      -subj "/CN=*.homelab.local" \
      -addext "subjectAltName=DNS:*.homelab.local,DNS:homelab.local"
    ```
@@ -866,3 +866,174 @@ If you encounter ACL token issues with Nomad CLI:
    ```bash
    echo 'export NOMAD_TOKEN=<your-token>' >> ~/.bashrc
    ```
+
+Here are the updates that should be added to your `troubleshooting.md` file:
+
+```markdown
+## Volume-Related Issues
+
+### Error: "unknown volume type" When Creating Volumes
+
+**Issue**:
+When running `nomad volume create` commands, you receive an error message:
+```
+Error unknown volume type:
+```
+
+**Cause**:
+The Synology version of Nomad does not support the standard `host` volume type used in the `nomad volume create` command. This is a limitation of the Nomad implementation on Synology NAS systems.
+
+**Solution**:
+Instead of using Nomad's volume system, use Docker volume mounts directly in your job definitions:
+
+1. Ensure your directories are created properly:
+   ```bash
+   # Verify the directory exists
+   ls -la /volume1/docker/nomad/volumes/
+   
+   # Create it if needed
+   mkdir -p /volume1/docker/nomad/volumes/service_data
+   chmod 755 /volume1/docker/nomad/volumes/service_data
+   ```
+
+2. Use Docker volume mounts in your job definition:
+   ```hcl
+   job "service-name" {
+     group "service-group" {
+       task "service-task" {
+         config {
+           image = "service-image:version"
+           volumes = [
+             "/volume1/docker/nomad/volumes/service_data:/path/in/container"
+           ]
+         }
+       }
+     }
+   }
+   ```
+
+3. Deploy the job:
+   ```bash
+   nomad job run service-job.hcl
+   ```
+
+### Volume Permissions Issues
+
+**Issue**:
+Container cannot write to the mounted volume or you see permission errors in logs.
+
+**Cause**:
+The container's user ID (UID) doesn't have write permissions to the mounted directory on the host.
+
+**Solution**:
+Set the correct ownership on the host directory to match the container's user:
+
+1. Find the UID and GID that the service uses inside the container:
+
+   Common UIDs for services:
+   - Grafana: 472:472
+   - PostgreSQL: 999:999
+   - Prometheus: 65534:65534 (nobody user)
+   - Consul: 100:1000 (varies)
+
+2. Apply the correct ownership:
+   ```bash
+   sudo chown -R <UID>:<GID> /volume1/docker/nomad/volumes/service_data
+   ```
+
+3. Set adequate permissions:
+   ```bash
+   sudo chmod -R 755 /volume1/docker/nomad/volumes/service_data
+   ```
+
+4. For services needing write access by multiple users, use more permissive settings:
+   ```bash
+   sudo chmod 777 /volume1/docker/nomad/volumes/consul_data
+   ```
+
+### Volume Path Not Found
+
+**Issue**:
+Container fails to start with errors about missing mount points.
+
+**Cause**:
+The host path specified in the volume mount doesn't exist or has a typo.
+
+**Solution**:
+1. Verify the path exists on the host:
+   ```bash
+   ls -la /volume1/docker/nomad/volumes/service_data
+   ```
+
+2. Create it if needed:
+   ```bash
+   mkdir -p /volume1/docker/nomad/volumes/service_data
+   ```
+
+3. Check your job definition for typos in the volume path:
+   ```hcl
+   volumes = [
+     "/volume1/docker/nomad/volumes/service_data:/container/path"
+   ]
+   ```
+
+### Data Not Persisting Between Restarts
+
+**Issue**:
+Data is lost when a container or service is restarted.
+
+**Cause**:
+The container might be writing to a non-mounted path or the volume mount is incorrect.
+
+**Solution**:
+1. Verify your service is configured to write to the correct path inside the container:
+   ```bash
+   # Get allocation ID
+   ALLOC_ID=$(nomad job status service-name | grep running | awk '{print $1}')
+   
+   # Check the paths inside the container
+   nomad alloc exec $ALLOC_ID ls -la /path/in/container
+   ```
+
+2. Check that the volume mount is correctly specified:
+   ```bash
+   nomad job status -verbose service-name | grep volume
+   ```
+
+3. Verify data is being written to the host:
+   ```bash
+   ls -la /volume1/docker/nomad/volumes/service_data
+   ```
+
+4. Update your job definition if needed:
+   ```hcl
+   volumes = [
+     "/volume1/docker/nomad/volumes/service_data:/correct/path/in/container"
+   ]
+   ```
+
+## Synology-Specific Volume Troubleshooting
+
+### Managing Service UIDs/GIDs
+
+**Issue**:
+Different containers expect different user IDs, which can cause permission issues on Synology.
+
+**Solution**:
+Create a reference table of service UIDs/GIDs for quick troubleshooting:
+
+| Service | Container UID:GID | Required Permissions |
+|---------|------------------|----------------------|
+| Grafana | 472:472 | 755 |
+| PostgreSQL | 999:999 | 700 |
+| Consul | 100:1000 | 777 |
+| Prometheus | 65534:65534 | 755 |
+
+Apply these permissions during setup or when troubleshooting:
+```bash
+sudo chown -R 472:472 /volume1/docker/nomad/volumes/grafana_data
+sudo chmod 755 /volume1/docker/nomad/volumes/grafana_data
+```
+```
+
+These troubleshooting sections should be added to your `troubleshooting.md` file to help users overcome common volume-related issues with the Synology implementation of Nomad.

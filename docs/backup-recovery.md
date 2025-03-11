@@ -30,15 +30,15 @@ The platform has several components that need to be backed up:
 
 | Component | Data Location | Criticality | Contents |
 |-----------|---------------|------------|----------|
-| Consul | /volume1/nomad/volumes/consul_data | High | Service registry, KV store |
-| Vault | /volume1/nomad/volumes/vault_data | Critical | Secrets, encryption keys, certificates |
-| Docker Registry | /volume1/nomad/volumes/registry_data | Medium | Container images |
-| Prometheus | /volume1/nomad/volumes/prometheus_data | Low | Historical metrics |
-| Grafana | /volume1/nomad/volumes/grafana_data | Medium | Dashboards, users, settings |
-| Loki | /volume1/nomad/volumes/loki_data | Low | Log data |
-| Keycloak | /volume1/nomad/volumes/keycloak_data | High | User directory, authentication settings |
-| Configuration | /volume1/nomad/config | High | Platform configuration |
-| Job Definitions | /volume1/nomad/jobs | High | Job definitions |
+| Consul | /volume1/docker/nomad/volumes/consul_data | High | Service registry, KV store |
+| Vault | /volume1/docker/nomad/volumes/vault_data | Critical | Secrets, encryption keys, certificates |
+| Docker Registry | /volume1/docker/nomad/volumes/registry_data | Medium | Container images |
+| Prometheus | /volume1/docker/nomad/volumes/prometheus_data | Low | Historical metrics |
+| Grafana | /volume1/docker/nomad/volumes/grafana_data | Medium | Dashboards, users, settings |
+| Loki | /volume1/docker/nomad/volumes/loki_data | Low | Log data |
+| Keycloak | /volume1/docker/nomad/volumes/keycloak_data | High | User directory, authentication settings |
+| Configuration | /volume1/docker/nomad/config | High | Platform configuration |
+| Job Definitions | /volume1/docker/nomad/jobs | High | Job definitions |
 
 ## Synology-Specific Backup Options
 
@@ -60,8 +60,8 @@ To configure Hyper Backup for the platform:
 2. Create a new backup task
 3. Select destination (external USB drive connected to DS923+)
 4. Select these folders:
-   - `/volume1/nomad/`
-   - `/volume1/nomad/volumes/`
+   - `/volume1/docker/nomad/`
+   - `/volume1/docker/nomad/volumes/`
 5. Configure schedule (daily at 1:00 AM)
 6. Set retention policy (7 daily, 4 weekly)
 7. Enable integrity check and compression
@@ -88,11 +88,11 @@ The most comprehensive backup approach uses Synology's Hyper Backup:
 
 1. **Install and Configure Hyper Backup**:
    - Install from Package Center
-   - Create backup task for `/volume1/nomad/` to external drive
+   - Create backup task for `/volume1/docker/nomad/` to external drive
    - Schedule daily execution
 
 2. **Pre-Backup Script**:
-   Create a script at `/volume1/nomad/scripts/pre-backup.sh`:
+   Create a script at `/volume1/docker/nomad/scripts/pre-backup.sh`:
    ```bash
    #!/bin/bash
    # Pre-backup script to ensure data consistency
@@ -106,7 +106,7 @@ The most comprehensive backup approach uses Synology's Hyper Backup:
    
    # Export Consul snapshot
    nomad alloc exec -task consul $(nomad job allocs -job consul -latest | tail -n +2 | awk '{print $1}') consul snapshot save /tmp/consul-snapshot.snap
-   nomad alloc exec -task consul $(nomad job allocs -job consul -latest | tail -n +2 | awk '{print $1}') cat /tmp/consul-snapshot.snap > /volume1/nomad/config/consul-snapshot.snap
+   nomad alloc exec -task consul $(nomad job allocs -job consul -latest | tail -n +2 | awk '{print $1}') cat /tmp/consul-snapshot.snap > /volume1/docker/nomad/config/consul-snapshot.snap
    
    # Wait for proper shutdown
    sleep 10
@@ -115,7 +115,7 @@ The most comprehensive backup approach uses Synology's Hyper Backup:
    ```
 
 3. **Post-Backup Script**:
-   Create a script at `/volume1/nomad/scripts/post-backup.sh`:
+   Create a script at `/volume1/docker/nomad/scripts/post-backup.sh`:
    ```bash
    #!/bin/bash
    # Post-backup script to restart services
@@ -123,8 +123,8 @@ The most comprehensive backup approach uses Synology's Hyper Backup:
    echo "Starting post-backup procedures at $(date)" >> /volume1/logs/platform/backup.log
    
    # Restart services
-   nomad job run /volume1/nomad/jobs/vault.hcl
-   nomad job run /volume1/nomad/jobs/keycloak.hcl
+   nomad job run /volume1/docker/nomad/jobs/vault.hcl
+   nomad job run /volume1/docker/nomad/jobs/keycloak.hcl
    
    # Wait for services to start
    sleep 30
@@ -139,8 +139,8 @@ The most comprehensive backup approach uses Synology's Hyper Backup:
 4. **Configure Hyper Backup Task to Use Scripts**:
    - In Hyper Backup, edit the task
    - Under "Settings", enable "Run script"
-   - Set pre-backup script: `/volume1/nomad/scripts/pre-backup.sh`
-   - Set post-backup script: `/volume1/nomad/scripts/post-backup.sh`
+   - Set pre-backup script: `/volume1/docker/nomad/scripts/pre-backup.sh`
+   - Set post-backup script: `/volume1/docker/nomad/scripts/post-backup.sh`
 
 ### Critical Component Manual Backups
 
@@ -173,10 +173,10 @@ fi
 nomad job stop vault
 
 # File-based backup
-tar -czf ${BACKUP_DIR}/vault_data.tar.gz -C /volume1/nomad/volumes vault_data
+tar -czf ${BACKUP_DIR}/vault_data.tar.gz -C /volume1/docker/nomad/volumes vault_data
 
 # Restart Vault
-nomad job run /volume1/nomad/jobs/vault.hcl
+nomad job run /volume1/docker/nomad/jobs/vault.hcl
 
 echo "Vault backup completed. YOU WILL NEED TO UNSEAL VAULT NOW."
 echo "Backup stored at ${BACKUP_DIR}"
@@ -217,21 +217,21 @@ To restore the entire platform from a Hyper Backup:
    - Connect the external backup drive
    - Open Hyper Backup, go to Restore
    - Select the backup task and version to restore
-   - Select restoration of `/volume1/nomad/` directory
+   - Select restoration of `/volume1/docker/nomad/` directory
    - Start the restoration process
 
 3. **Post-Restore Steps**:
    ```bash
    # Fix permissions
    chown -R your-username:users /volume1/nomad
-   chown -R 472:472 /volume1/nomad/volumes/grafana_data
+   chown -R 472:472 /volume1/docker/nomad/volumes/grafana_data
    
    # Start core services in order
-   nomad job run /volume1/nomad/jobs/consul.hcl
+   nomad job run /volume1/docker/nomad/jobs/consul.hcl
    sleep 10
-   nomad job run /volume1/nomad/jobs/traefik.hcl
+   nomad job run /volume1/docker/nomad/jobs/traefik.hcl
    sleep 5
-   nomad job run /volume1/nomad/jobs/vault.hcl
+   nomad job run /volume1/docker/nomad/jobs/vault.hcl
    
    # Unseal Vault
    # Get the Vault allocation ID
@@ -243,14 +243,14 @@ To restore the entire platform from a Hyper Backup:
    nomad alloc exec -task vault ${VAULT_ALLOC} vault operator unseal <key3>
    
    # Start remaining services
-   nomad job run /volume1/nomad/jobs/registry.hcl
-   nomad job run /volume1/nomad/jobs/prometheus.hcl
-   nomad job run /volume1/nomad/jobs/grafana.hcl
-   nomad job run /volume1/nomad/jobs/loki.hcl
-   nomad job run /volume1/nomad/jobs/promtail.hcl
-   nomad job run /volume1/nomad/jobs/keycloak.hcl
-   nomad job run /volume1/nomad/jobs/oidc-proxy.hcl
-   nomad job run /volume1/nomad/jobs/homepage.hcl
+   nomad job run /volume1/docker/nomad/jobs/registry.hcl
+   nomad job run /volume1/docker/nomad/jobs/prometheus.hcl
+   nomad job run /volume1/docker/nomad/jobs/grafana.hcl
+   nomad job run /volume1/docker/nomad/jobs/loki.hcl
+   nomad job run /volume1/docker/nomad/jobs/promtail.hcl
+   nomad job run /volume1/docker/nomad/jobs/keycloak.hcl
+   nomad job run /volume1/docker/nomad/jobs/oidc-proxy.hcl
+   nomad job run /volume1/docker/nomad/jobs/homepage.hcl
    ```
 
 ### Critical Component Recovery
@@ -271,11 +271,11 @@ BACKUP_DIR="/volume2/backups/vault/<timestamp>"
 nomad job stop vault
 
 # Restore from file backup
-rm -rf /volume1/nomad/volumes/vault_data
-tar -xzf ${BACKUP_DIR}/vault_data.tar.gz -C /volume1/nomad/volumes
+rm -rf /volume1/docker/nomad/volumes/vault_data
+tar -xzf ${BACKUP_DIR}/vault_data.tar.gz -C /volume1/docker/nomad/volumes
 
 # Restart Vault
-nomad job run /volume1/nomad/jobs/vault.hcl
+nomad job run /volume1/docker/nomad/jobs/vault.hcl
 
 # Get the Vault allocation ID
 VAULT_ALLOC=$(nomad job allocs -job vault -latest | tail -n +2 | awk '{print $1}')
@@ -342,7 +342,7 @@ job "backup-critical" {
       
       config {
         command = "/bin/bash"
-        args    = ["/volume1/nomad/scripts/critical-backup.sh"]
+        args    = ["/volume1/docker/nomad/scripts/critical-backup.sh"]
       }
       
       resources {

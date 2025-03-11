@@ -739,7 +739,7 @@ job "backup-preparation" {
       
       config {
         command = "/bin/bash"
-        args    = ["/volume1/nomad/scripts/pre-backup.sh"]
+        args    = ["/volume1/docker/nomad/scripts/pre-backup.sh"]
       }
       
       resources {
@@ -850,13 +850,13 @@ Set up automatic certificate rotation:
 
 # Generate new certificates
 openssl req -x509 -nodes -days 3650 -newkey rsa:2048 \
-  -keyout /volume1/nomad/config/certs/homelab.key \
-  -out /volume1/nomad/config/certs/homelab.crt \
+  -keyout /volume1/docker/nomad/config/certs/homelab.key \
+  -out /volume1/docker/nomad/config/certs/homelab.crt \
   -subj "/CN=*.homelab.local" \
   -addext "subjectAltName=DNS:*.homelab.local,DNS:homelab.local"
 
 # Copy to volumes directory for mounting
-cp /volume1/nomad/config/certs/homelab.* /volume1/nomad/volumes/certificates/
+cp /volume1/docker/nomad/config/certs/homelab.* /volume1/docker/nomad/volumes/certificates/
 
 # Restart Traefik to pick up new certificates
 nomad job restart traefik
@@ -932,7 +932,7 @@ Create custom Grafana dashboards for your specific needs:
 
 ```bash
 # In your deployment script
-cat > /volume1/nomad/volumes/standard/grafana_data/dashboards/custom.json << EOF
+cat > /volume1/docker/nomad/volumes/standard/grafana_data/dashboards/custom.json << EOF
 {
   "dashboard": {
     "title": "Synology DS923+ System Dashboard",

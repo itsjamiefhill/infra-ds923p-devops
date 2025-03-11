@@ -230,7 +230,7 @@ The integration uses Consul's API to query for services and their health.
 Homepage configuration is persisted on the Synology NAS using a Nomad volume:
 - **Volume Name**: homepage_data
 - **Storage Class**: standard
-- **Host Path**: `/volume1/nomad/volumes/standard/homepage_data` (default)
+- **Host Path**: `/volume1/docker/nomad/volumes/standard/homepage_data` (default)
 - **Container Path**: `/app/config`
 
 This ensures that your customizations are maintained across restarts and DSM updates.
@@ -432,11 +432,11 @@ To backup Homepage configuration:
 
 ```bash
 # Option 1: Using Synology Hyper Backup
-# Include /volume1/nomad/volumes/standard/homepage_data in your backup task
+# Include /volume1/docker/nomad/volumes/standard/homepage_data in your backup task
 
 # Option 2: Manual backup
 # Archive configuration directory
-tar -czf /volume2/backups/services/homepage_backup.tar.gz -C /volume1/nomad/volumes/standard homepage_data
+tar -czf /volume2/backups/services/homepage_backup.tar.gz -C /volume1/docker/nomad/volumes/standard homepage_data
 ```
 
 ### Restoring Configuration
@@ -448,8 +448,8 @@ To restore from a backup:
 nomad job stop homepage
 
 # Restore configuration
-rm -rf /volume1/nomad/volumes/standard/homepage_data/*
-tar -xzf /volume2/backups/services/homepage_backup.tar.gz -C /volume1/nomad/volumes/standard
+rm -rf /volume1/docker/nomad/volumes/standard/homepage_data/*
+tar -xzf /volume2/backups/services/homepage_backup.tar.gz -C /volume1/docker/nomad/volumes/standard
 
 # Restart Homepage
 nomad job run jobs/homepage.hcl

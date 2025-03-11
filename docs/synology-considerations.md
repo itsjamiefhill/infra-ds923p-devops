@@ -7,13 +7,14 @@ This document outlines specific considerations, limitations, and best practices 
 1. [Hardware Specifications](#hardware-specifications)
 2. [DSM Limitations](#dsm-limitations)
 3. [Container Manager Considerations](#container-manager-considerations)
-4. [Storage Considerations](#storage-considerations)
-5. [Network Configuration](#network-configuration)
-6. [Memory Management](#memory-management)
-7. [Backup Integration](#backup-integration)
-8. [DSM Updates and Maintenance](#dsm-updates-and-maintenance)
-9. [Performance Optimization](#performance-optimization)
-10. [Security Considerations](#security-considerations)
+4. [Nomad Volume Limitations on Synology](#nomad-volume-limitations-on-synology)
+5. [Storage Considerations](#storage-considerations)
+6. [Network Configuration](#network-configuration)
+7. [Memory Management](#memory-management)
+8. [Backup Integration](#backup-integration)
+9. [DSM Updates and Maintenance](#dsm-updates-and-maintenance)
+10. [Performance Optimization](#performance-optimization)
+11. [Security Considerations](#security-considerations)
 
 ## Hardware Specifications
 
@@ -75,10 +76,108 @@ When using the local Docker Registry:
    sudo mkdir -p /etc/docker/certs.d/registry.homelab.local:5000
 
    # Copy your self-signed certificate
-   sudo cp /volume1/nomad/config/certs/homelab.crt /etc/docker/certs.d/registry.homelab.local:5000/ca.crt
+   sudo cp /volume1/docker/nomad/config/certs/homelab.crt /etc/docker/certs.d/registry.homelab.local:5000/ca.crt
    ```
 
 2. Restart the Container Manager package after certificate changes.
+
+## Nomad Volume Limitations on Synology
+
+The Synology implementation of Nomad has specific limitations that affect how persistent storage is configured for the HomeLab DevOps Platform.
+
+### Missing Host Volume Support
+
+While standard Nomad installations support the `host` volume type, the Synology version does not support this feature. Attempting to register volumes using `nomad volume create` will result in an "Error unknown volume type" message.
+
+### Alternative Volume Approach
+
+Due to this limitation, the platform uses Docker volume mounts instead of Nomad volumes:
+
+#### Standard Nomad (not supported on Synology):
+```hcl
+volume "consul_data" {
+  type = "host"
+  config {
+    source = "/volume1/nomad/volumes/consul_data"
+  }
+}
+
+job "consul" {
+  group "consul" {
+    volume "consul_data" {
+      type = "host"
+      read_only = false
+      source = "consul_data"
+    }
+    
+    task "consul" {
+      volume_mount {
+        volume = "consul_data"
+        destination = "/consul/data"
+        read_only = false
+      }
+    }
+  }
+}
+```
+
+#### Synology Nomad (supported approach):
+```hcl
+job "consul" {
+  group "consul" {
+    task "consul" {
+      config {
+        image = "consul:latest"
+        volumes = [
+          "/volume1/nomad/volumes/consul_data:/consul/data"
+        ]
+      }
+    }
+  }
+}
+```
+
+### Installation Script Adaptation
+
+The platform's installation scripts detect the Synology environment and adapt accordingly:
+
+1. The `01-setup-directories.sh` script still creates all necessary directories with appropriate permissions
+2. The `02-configure-volumes.sh` script identifies that Nomad doesn't support host volumes and creates a `VOLUME_README.md` file with instructions
+3. Job definitions use Docker's volume mount system instead of Nomad's volume system
+
+### Volume Management Implications
+
+This alternative approach has several implications:
+
+1. **Volume Management**: Volumes can't be managed through Nomad commands like `nomad volume list` or `nomad volume status`
+2. **Visibility**: There's no central place to view all volumes and their status in Nomad
+3. **Allocation Recovery**: If a job is restarted on a different client, the data won't automatically move (but this is less of an issue in a single-node Synology setup)
+4. **Permissions**: Container UID/GID mapping requires careful management of host directory permissions
+
+### Best Practices for Synology Volume Management
+
+1. **Directory Structure**: Maintain a consistent directory structure in `/volume1/nomad/volumes/`
+2. **Permission Management**: Set appropriate ownership and permissions on host directories to match container users:
+   ```bash
+   chown -R 472:472 /volume1/nomad/volumes/grafana_data  # Grafana runs as UID 472
+   chmod 777 /volume1/nomad/volumes/consul_data  # Consul needs full access
+   ```
+3. **Documentation**: Keep a reference of volume mappings and required permissions
+4. **Backup Strategy**: Back up the entire `/volume1/nomad/volumes/` directory for comprehensive data protection
+
+### Container User IDs on Synology
+
+Common container user IDs that require special permission handling:
+
+| Service | Container UID:GID | Required Permissions |
+|---------|------------------|----------------------|
+| Grafana | 472:472 | 755 |
+| PostgreSQL | 999:999 | 700 |
+| Consul | varies (often runs as root) | 777 |
+| Prometheus | 65534:65534 (nobody) | 755 |
+| Loki | varies | 755 |
+
+Apply these permissions during installation or when troubleshooting permission-related issues.
 
 ## Storage Considerations
 
@@ -97,15 +196,15 @@ The platform uses logical storage classes to organize data:
 
 1. **high_performance**: For services requiring fast I/O
    - Recommended for: Consul, Vault, Prometheus
-   - Located at: `/volume1/nomad/volumes/high_performance`
+   - Located at: `/volume1/docker/nomad/volumes/high_performance`
 
 2. **high_capacity**: For services requiring larger storage
    - Recommended for: Loki, Registry
-   - Located at: `/volume1/nomad/volumes/high_capacity`
+   - Located at: `/volume1/docker/nomad/volumes/high_capacity`
 
 3. **standard**: For general purpose storage
    - Recommended for: Grafana, Keycloak, Homepage
-   - Located at: `/volume1/nomad/volumes/standard`
+   - Located at: `/volume1/docker/nomad/volumes/standard`
 
 Though all are located on the same physical RAID array, this organization helps with logical separation and management.
 
@@ -113,7 +212,7 @@ Though all are located on the same physical RAID array, this organization helps 
 
 If you add SSD caching to your DS923+:
 1. Configure it as "read-only" cache for best reliability
-2. Direct it toward the `/volume1/nomad/volumes/high_performance` directory for maximum benefit
+2. Direct it toward the `/volume1/docker/nomad/volumes/high_performance` directory for maximum benefit
 
 To enable SSD cache in DSM:
 - Navigate to Storage Manager > SSD Cache
@@ -203,8 +302,8 @@ Leverage Synology's Hyper Backup for platform data:
 
 1. Install Hyper Backup from Package Center
 2. Create a backup task for these directories:
-   - `/volume1/nomad/` (configuration)
-   - `/volume1/nomad/volumes/` (service data)
+   - `/volume1/docker/nomad/` (configuration)
+   - `/volume1/docker/nomad/volumes/` (service data)
 3. Configure schedule (daily at off-peak hours)
 4. Set retention policy (7 daily, 4 weekly)
 5. Configure pre/post-backup scripts:
@@ -219,7 +318,7 @@ nomad job stop keycloak
 # Create Consul snapshot
 CONSUL_ALLOC=$(nomad job allocs -job consul -latest | tail -n +2 | awk '{print $1}')
 nomad alloc exec -task consul ${CONSUL_ALLOC} consul snapshot save /tmp/consul-snapshot.snap
-nomad alloc exec -task consul ${CONSUL_ALLOC} cat /tmp/consul-snapshot.snap > /volume1/nomad/config/consul-snapshot.snap
+nomad alloc exec -task consul ${CONSUL_ALLOC} cat /tmp/consul-snapshot.snap > /volume1/docker/nomad/config/consul-snapshot.snap
 
 # Wait for clean shutdown
 sleep 10
@@ -229,8 +328,8 @@ sleep 10
 # Post-backup script
 #!/bin/bash
 # Restart services
-nomad job run /volume1/nomad/jobs/vault.hcl
-nomad job run /volume1/nomad/jobs/keycloak.hcl
+nomad job run /volume1/docker/nomad/jobs/vault.hcl
+nomad job run /volume1/docker/nomad/jobs/keycloak.hcl
 
 # Unseal Vault
 VAULT_ALLOC=$(nomad job allocs -job vault -latest | tail -n +2 | awk '{print $1}')
@@ -362,8 +461,8 @@ For your self-signed certificates:
 1. Create a strong certificate:
    ```bash
    openssl req -x509 -nodes -days 3650 -newkey rsa:4096 \
-     -keyout /volume1/nomad/config/certs/homelab.key \
-     -out /volume1/nomad/config/certs/homelab.crt \
+     -keyout /volume1/docker/nomad/config/certs/homelab.key \
+     -out /volume1/docker/nomad/config/certs/homelab.crt \
      -subj "/CN=*.homelab.local" \
      -addext "subjectAltName=DNS:*.homelab.local,DNS:homelab.local"
    ```

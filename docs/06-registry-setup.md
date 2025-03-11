@@ -65,7 +65,7 @@ health:
 
 Registry data is persisted on the Synology NAS using a Nomad volume:
 - **Volume Name**: registry_data
-- **Host Path**: `/volume1/nomad/volumes/registry_data` (default)
+- **Host Path**: `/volume1/docker/nomad/volumes/registry_data` (default)
 - **Container Path**: `/var/lib/registry`
 
 This ensures that Docker images are maintained across restarts, DSM updates, and service redeployments.
@@ -78,7 +78,7 @@ For the DS923+ with a RAID10 configuration, it's recommended to place the regist
 volume "registry_data" {
   type = "host"
   config {
-    source = "/volume1/nomad/volumes/high_capacity/registry_data"
+    source = "/volume1/docker/nomad/volumes/high_capacity/registry_data"
   }
 }
 ```
@@ -382,14 +382,14 @@ To backup the Registry:
 
 ```bash
 # Option 1: Using Synology Hyper Backup
-# Include /volume1/nomad/volumes/registry_data in your backup task
+# Include /volume1/docker/nomad/volumes/registry_data in your backup task
 
 # Option 2: Manual backup
 # Stop the Registry service
 nomad job stop docker-registry
 
 # Backup the data directory
-tar -czf /volume2/backups/services/registry_backup.tar.gz -C /volume1/nomad/volumes registry_data
+tar -czf /volume2/backups/services/registry_backup.tar.gz -C /volume1/docker/nomad/volumes registry_data
 
 # Restart Registry
 nomad job run jobs/registry.hcl
@@ -404,8 +404,8 @@ To restore from a backup:
 nomad job stop docker-registry
 
 # Restore the data directory
-rm -rf /volume1/nomad/volumes/registry_data/*
-tar -xzf /volume2/backups/services/registry_backup.tar.gz -C /volume1/nomad/volumes
+rm -rf /volume1/docker/nomad/volumes/registry_data/*
+tar -xzf /volume2/backups/services/registry_backup.tar.gz -C /volume1/docker/nomad/volumes
 
 # Restart Registry
 nomad job run jobs/registry.hcl
@@ -427,7 +427,7 @@ Common Registry issues and solutions:
    - Validate authentication credentials
 
 3. **Storage Issues**:
-   - Check disk space: `df -h /volume1/nomad/volumes/registry_data`
+   - Check disk space: `df -h /volume1/docker/nomad/volumes/registry_data`
    - Verify Registry container has write access to the volume
    - Run garbage collection to reclaim space
 

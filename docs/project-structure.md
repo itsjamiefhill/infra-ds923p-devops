@@ -141,7 +141,7 @@ The `docs/` directory contains comprehensive documentation for each component:
 
 All persistent data is stored in the volume directories:
 
-### Volume 1 (/volume1/nomad/):
+### Volume 1 (/volume1/docker/nomad/):
 
 - **volumes/high_performance/**: For services requiring fast I/O
   - consul_data/

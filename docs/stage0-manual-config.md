@@ -342,25 +342,25 @@ If ACLs are enabled (they may not be by default):
 2. Create the directory structure:
    ```bash
    # Main directories
-   mkdir -p /volume1/nomad/config
-   mkdir -p /volume1/nomad/jobs
+   mkdir -p /volume1/docker/nomad/config
+   mkdir -p /volume1/docker/nomad/jobs
    mkdir -p /volume1/logs/platform
 
    # Storage class directories
-   mkdir -p /volume1/nomad/volumes/high_performance
-   mkdir -p /volume1/nomad/volumes/high_capacity
-   mkdir -p /volume1/nomad/volumes/standard
+   mkdir -p /volume1/docker/nomad/volumes/high_performance
+   mkdir -p /volume1/docker/nomad/volumes/high_capacity
+   mkdir -p /volume1/docker/nomad/volumes/standard
 
    # Service directories
-   mkdir -p /volume1/nomad/volumes/consul_data
-   mkdir -p /volume1/nomad/volumes/vault_data
-   mkdir -p /volume1/nomad/volumes/prometheus_data
-   mkdir -p /volume1/nomad/volumes/grafana_data
-   mkdir -p /volume1/nomad/volumes/loki_data
-   mkdir -p /volume1/nomad/volumes/registry_data
-   mkdir -p /volume1/nomad/volumes/keycloak_data
-   mkdir -p /volume1/nomad/volumes/homepage_data
-   mkdir -p /volume1/nomad/volumes/certificates
+   mkdir -p /volume1/docker/nomad/volumes/consul_data
+   mkdir -p /volume1/docker/nomad/volumes/vault_data
+   mkdir -p /volume1/docker/nomad/volumes/prometheus_data
+   mkdir -p /volume1/docker/nomad/volumes/grafana_data
+   mkdir -p /volume1/docker/nomad/volumes/loki_data
+   mkdir -p /volume1/docker/nomad/volumes/registry_data
+   mkdir -p /volume1/docker/nomad/volumes/keycloak_data
+   mkdir -p /volume1/docker/nomad/volumes/homepage_data
+   mkdir -p /volume1/docker/nomad/volumes/certificates
 
    # Backup directories
    mkdir -p /volume2/backups/system
@@ -383,7 +383,7 @@ If ACLs are enabled (they may not be by default):
    chmod -R 755 /volume2/datasets
 
    # Special permissions for certain directories
-   chmod 777 /volume1/nomad/volumes/consul_data
+   chmod 777 /volume1/docker/nomad/volumes/consul_data
    ```
 
 ## Verification Checklist
