@@ -1,6 +1,6 @@
 #!/bin/bash
 # HomeLab DevOps Platform Installation Script
-# Limited version executing parts 01-03 for initial testing
+# Updated version executing parts 01-04 for initial testing
 
 set -e
 
@@ -145,7 +145,7 @@ run_module() {
 
 # Main installation process
 main() {
-  echo_log "Starting HomeLab DevOps Platform installation (parts 01-03)..."
+  echo_log "Starting HomeLab DevOps Platform installation (parts 01-04)..."
   
   # Setup script environment (creates log directory and loads config)
   setup_script_environment
@@ -156,13 +156,15 @@ main() {
   # Load configuration (already done in setup_script_environment, but kept for clarity)
   load_configuration
   
-  # Run module scripts 01, 02, and 03
+  # Run module scripts 01, 02, 03, and 04
   run_module "01-setup-directories.sh"
   run_module "02-configure-volumes.sh"
   run_module "03-deploy-consul.sh"
+  run_module "04-deploy-traefik.sh"
   
-  log "Initial installation (parts 01-03) completed successfully!"
+  log "Installation (parts 01-04) completed successfully!"
   log "You can access Consul UI at http://localhost:${CONSUL_HTTP_PORT} or http://consul.homelab.local (if DNS is configured)"
+  log "You can access Traefik dashboard at https://${TRAEFIK_HOST:-traefik.homelab.local} or http://localhost:${TRAEFIK_ADMIN_PORT:-8081}" 
   log "You can now proceed with testing before continuing to the next parts."
 }
 

@@ -1,6 +1,6 @@
 #!/bin/bash
 # uninstall.sh
-# Limited uninstall script that cleans up directories, volumes, and services from parts 01-03
+# Uninstall script that cleans up directories, volumes, and services from parts 01-04
 
 set -e
 
@@ -67,7 +67,7 @@ confirm() {
 # Function to setup logging
 setup_logging() {
     mkdir -p "${LOGS_DIR}"
-    echo "=== Uninstallation (parts 01-03) started at $(date) ===" > "${LOGS_DIR}/uninstall.log"
+    echo "=== Uninstallation (parts 01-04) started at $(date) ===" > "${LOGS_DIR}/uninstall.log"
 }
 
 # Function to check if Nomad is available
@@ -96,6 +96,20 @@ stop_consul() {
         success "Consul job stopped and purged"
     else
         log "Consul job not found or already stopped"
+    fi
+}
+
+# Function to stop Traefik job
+stop_traefik() {
+    log "Stopping Traefik job..."
+    
+    # Check if Traefik job exists in Nomad and stop it
+    if nomad job status traefik &>/dev/null; then
+        nomad job stop -purge traefik || warn "Failed to stop Traefik job"
+        sleep 5 # Give Nomad time to stop the job
+        success "Traefik job stopped and purged"
+    else
+        log "Traefik job not found or already stopped"
     fi
 }
 
@@ -132,13 +146,35 @@ remove_consul_dns() {
     fi
 }
 
+# Function to remove Traefik DNS configuration
+remove_traefik_dns() {
+    log "Removing Traefik hosts file entries..."
+    
+    # Determine domain from config
+    DOMAIN=${DOMAIN:-"homelab.local"}
+    TRAEFIK_HOST=${TRAEFIK_HOST:-"traefik.${DOMAIN}"}
+    
+    # Remove hosts file entry
+    if grep -q "${TRAEFIK_HOST}" /etc/hosts; then
+        if confirm "Do you want to remove the Traefik entry from /etc/hosts?"; then
+            sudo sed -i "/${TRAEFIK_HOST}/d" /etc/hosts
+            success "Traefik hosts file entry removed"
+        else
+            log "Keeping Traefik hosts file entry"
+        fi
+    else
+        log "Traefik hosts file entry not found"
+    fi
+}
+
 # Function to remove Nomad volumes
 remove_nomad_volumes() {
     log "Removing Nomad volumes..."
     
     # List of volumes to delete
     VOLUMES=(
-        "consul_data"  # Consul data volume
+        "consul_data"    # Consul data volume
+        "certificates"   # SSL certificates volume
         "high_performance"
         "high_capacity"
         "standard"
@@ -150,7 +186,6 @@ remove_nomad_volumes() {
         "postgres_data"
         "keycloak_data"
         "homepage_data"
-        "certificates"
     )
     
     for volume in "${VOLUMES[@]}"; do
@@ -190,9 +225,13 @@ cleanup_local_files() {
         # Remove volume configuration
         rm -f ${CONFIG_DIR}/volumes.hcl
         
-        # Remove Consul job file
+        # Remove certificates volume configuration
+        rm -f ${CONFIG_DIR}/certificates.hcl
+        
+        # Remove job files
         rm -f ${JOB_DIR}/consul.hcl
         rm -f ${JOB_DIR}/consul.reference
+        rm -f ${JOB_DIR}/traefik.hcl
         
         # Remove Consul DNS backup config
         rm -f ${CONFIG_DIR}/10-consul
@@ -201,6 +240,17 @@ cleanup_local_files() {
         if [ -f "${SCRIPT_DIR}/bin/start-consul.sh" ]; then
             rm -f ${SCRIPT_DIR}/bin/start-consul.sh
             rm -f ${SCRIPT_DIR}/bin/stop-consul.sh
+        fi
+        
+        # Remove Traefik start/stop scripts if they exist
+        if [ -f "${SCRIPT_DIR}/bin/start-traefik.sh" ]; then
+            rm -f ${SCRIPT_DIR}/bin/start-traefik.sh
+            rm -f ${SCRIPT_DIR}/bin/stop-traefik.sh
+        fi
+        
+        # Optionally remove certificates
+        if confirm "Do you want to remove the wildcard certificates from the config directory?"; then
+            rm -rf ${CONFIG_DIR}/certs || warn "Failed to remove certificates directory"
         fi
         
         success "Local configuration files cleaned up"
@@ -212,7 +262,7 @@ cleanup_local_files() {
 # Function to display uninstallation summary
 show_summary() {
     echo -e "\n${GREEN}==========================================================${NC}"
-    echo -e "${GREEN}      HomeLab DevOps Platform Uninstallation (Parts 01-03)   ${NC}"
+    echo -e "${GREEN}      HomeLab DevOps Platform Uninstallation (Parts 01-04)   ${NC}"
     echo -e "${GREEN}==========================================================${NC}"
     echo -e "\n${BLUE}Uninstallation completed with the following actions:${NC}\n"
     
@@ -232,11 +282,25 @@ show_summary() {
         echo -e "- ${YELLOW}Services:${NC} Consul service stopped and removed"
     fi
     
+    # Check if Traefik job exists
+    if nomad job status traefik &>/dev/null; then
+        echo -e "- ${YELLOW}Services:${NC} Traefik service still running as Nomad job"
+    else
+        echo -e "- ${YELLOW}Services:${NC} Traefik service stopped and removed"
+    fi
+    
     # Check if hosts file has Consul entry
     if grep -q "consul\.service\.consul" /etc/hosts; then
         echo -e "- ${YELLOW}DNS:${NC} Consul hosts file entry preserved"
     else
         echo -e "- ${YELLOW}DNS:${NC} Consul hosts file entry removed"
+    fi
+    
+    # Check if hosts file has Traefik entry
+    if grep -q "traefik\.${DOMAIN:-homelab.local}" /etc/hosts; then
+        echo -e "- ${YELLOW}DNS:${NC} Traefik hosts file entry preserved"
+    else
+        echo -e "- ${YELLOW}DNS:${NC} Traefik hosts file entry removed"
     fi
     
     # Check if Consul DNS integration exists
@@ -255,10 +319,17 @@ show_summary() {
     fi
     
     # Check data directories
-    if [ ! -d "${DATA_DIR}/consul_data" ] && [ ! -d "${DATA_DIR}/high_performance" ] && [ ! -d "${DATA_DIR}/high_capacity" ] && [ ! -d "${DATA_DIR}/standard" ]; then
+    if [ ! -d "${DATA_DIR}/consul_data" ] && [ ! -d "${DATA_DIR}/certificates" ] && [ ! -d "${DATA_DIR}/high_performance" ] && [ ! -d "${DATA_DIR}/high_capacity" ] && [ ! -d "${DATA_DIR}/standard" ]; then
         echo -e "- ${YELLOW}Data:${NC} Data directories removed"
     else
         echo -e "- ${YELLOW}Data:${NC} Data directories preserved"
+    fi
+    
+    # Check certificates
+    if [ ! -d "${CONFIG_DIR}/certs" ]; then
+        echo -e "- ${YELLOW}Certificates:${NC} SSL certificates removed"
+    else
+        echo -e "- ${YELLOW}Certificates:${NC} SSL certificates preserved"
     fi
     
     echo -e "\n${BLUE}Log file:${NC} ${LOGS_DIR}/uninstall.log"
@@ -269,11 +340,11 @@ show_summary() {
 # Main function
 main() {
     echo -e "${GREEN}==========================================================${NC}"
-    echo -e "${GREEN}  HomeLab DevOps Platform Uninstallation Script (Parts 01-03) ${NC}"
+    echo -e "${GREEN}  HomeLab DevOps Platform Uninstallation Script (Parts 01-04) ${NC}"
     echo -e "${GREEN}==========================================================${NC}"
     
     # Confirm before proceeding
-    if ! confirm "This will uninstall the HomeLab DevOps Platform directories, volumes, and services (Parts 01-03). Do you want to continue?"; then
+    if ! confirm "This will uninstall the HomeLab DevOps Platform directories, volumes, and services (Parts 01-04). Do you want to continue?"; then
         echo -e "\n${YELLOW}Uninstallation cancelled.${NC}"
         exit 0
     fi
@@ -284,19 +355,25 @@ main() {
     # Check Nomad
     check_nomad
     
-    # Step 0: Stop Consul job
+    # Step 0: Stop Traefik job first (since it depends on Consul)
+    stop_traefik
+    
+    # Step 1: Stop Consul job
     stop_consul
     
-    # Step 0.5: Remove Consul DNS integration
+    # Step 2: Remove Traefik DNS integration
+    remove_traefik_dns
+    
+    # Step 3: Remove Consul DNS integration
     remove_consul_dns
     
-    # Step 1: Remove Nomad volumes
+    # Step 4: Remove Nomad volumes
     remove_nomad_volumes
     
-    # Step 2: Remove volume data (optional)
+    # Step 5: Remove volume data (optional)
     remove_volume_data
     
-    # Step 3: Clean up local files (optional)
+    # Step 6: Clean up local files (optional)
     cleanup_local_files
     
     # Show summary
