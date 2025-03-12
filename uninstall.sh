@@ -323,9 +323,189 @@ show_summary() {
     echo -e "\n${GREEN}==========================================================${NC}"
 }
 
+# Function to fully stop all Consul-related jobs and containers
+stop_consul() {
+  log "Performing comprehensive Consul shutdown..."
+    
+  # Load Nomad token if available
+  if [ -f "${PARENT_DIR}/config/nomad_auth.conf" ]; then
+    source "${PARENT_DIR}/config/nomad_auth.conf"
+    export NOMAD_TOKEN
+    log "Loaded Nomad authentication token"
+  else
+    warn "No Nomad authentication token found. You may need to provide one."
+    echo -e "${YELLOW}Please enter your Nomad management token (leave empty to skip Nomad operations):${NC}"
+    read -r NOMAD_TOKEN
+    if [ -n "${NOMAD_TOKEN}" ]; then
+      export NOMAD_TOKEN
+      log "Using provided Nomad token"
+    else
+      warn "No token provided. Will skip Nomad API operations."
+    fi
+  fi
+  
+  # 1. Try to stop Consul job in Nomad if we have a token
+  if [ -n "${NOMAD_TOKEN}" ]; then
+    log "Checking for Consul job in Nomad..."
+    
+    # Test the token first
+    if curl -s -f -H "X-Nomad-Token: ${NOMAD_TOKEN}" "${NOMAD_ADDR:-http://127.0.0.1:4646}/v1/jobs" &>/dev/null; then
+      log "Successfully authenticated with Nomad API"
+      
+      # Stop the Consul job if it exists
+      job_exists=$(curl -s -H "X-Nomad-Token: ${NOMAD_TOKEN}" "${NOMAD_ADDR:-http://127.0.0.1:4646}/v1/job/consul" | grep -v "job not found" || echo "")
+      if [ -n "$job_exists" ]; then
+        log "Found Consul job, stopping with API..."
+        curl -s -X DELETE -H "X-Nomad-Token: ${NOMAD_TOKEN}" "${NOMAD_ADDR:-http://127.0.0.1:4646}/v1/job/consul?purge=true"
+        log "Consul job purged via API"
+        sleep 5
+      else
+        log "Consul job not found in Nomad"
+      fi
+    else
+      warn "Authentication with Nomad API failed. Token may be invalid."
+      warn "Will proceed to docker container cleanup only."
+    fi
+  else
+    warn "Skipping Nomad API operations due to missing token."
+  fi
+  
+  # 2. Find and stop all Docker containers with "consul" in their name
+  log "Stopping all Consul Docker containers..."
+  consul_containers=$(sudo docker ps -a | grep -i consul | awk '{print $1}')
+  if [ -n "$consul_containers" ]; then
+    for container in $consul_containers; do
+      log "Stopping Docker container: $container"
+      sudo docker stop "$container" && sudo docker rm "$container"
+    done
+    success "All Consul containers stopped and removed"
+  else
+    log "No Consul containers found"
+  fi
+  
+  # 3. Kill any remaining consul processes
+  log "Checking for lingering Consul processes..."
+  consul_pids=$(ps aux | grep -i [c]onsul | awk '{print $2}')
+  if [ -n "$consul_pids" ]; then
+    for pid in $consul_pids; do
+      log "Killing process: $pid"
+      sudo kill -9 "$pid" || warn "Failed to kill process $pid"
+    done
+  fi
+  
+  # 4. Verify Docker cleanup
+  log "Verifying Docker cleanup..."
+  if sudo docker ps | grep -qi consul; then
+    warn "Some Consul containers are still running. You may need to stop them manually."
+  else
+    log "No Consul containers running"
+  fi
+  
+  # 5. Ensure Consul doesn't restart by disabling auto-restart
+  log "Checking for container restart policies..."
+  restart_containers=$(sudo docker ps -a --filter "restart=always" | grep -i consul | awk '{print $1}')
+  if [ -n "$restart_containers" ]; then
+    for container in $restart_containers; do
+      log "Updating restart policy for container: $container"
+      sudo docker update --restart=no "$container" || warn "Failed to update restart policy"
+    done
+  fi
+  
+  # 6. As last resort, manually remove any Docker container that might contain "consul"
+  log "Forcing removal of any remaining Consul containers..."
+  sudo docker ps -a | grep -i consul | awk '{print $1}' | xargs -r sudo docker rm -f
+  
+  success "Consul shutdown completed"
+}
+
+# Function to remove Consul bin scripts
+remove_consul_scripts() {
+  log "Removing Consul helper scripts..."
+  
+  # List of Consul scripts to remove
+  SCRIPTS=(
+    "start-consul.sh"
+    "stop-consul.sh"
+    "consul-status.sh"
+    "consul-troubleshoot.sh"
+    "consul-docker-run.sh"
+    "consul-docker-stop.sh"
+  )
+  
+  for script in "${SCRIPTS[@]}"; do
+    if [ -f "${PARENT_DIR}/bin/${script}" ]; then
+      rm -f "${PARENT_DIR}/bin/${script}" || warn "Failed to remove ${script}"
+      log "Removed ${script}"
+    fi
+  done
+  
+  # Check if bin directory is empty and remove it if it is
+  if [ -d "${PARENT_DIR}/bin" ] && [ -z "$(ls -A ${PARENT_DIR}/bin 2>/dev/null)" ]; then
+    log "Bin directory is empty, removing it..."
+    rmdir "${PARENT_DIR}/bin" || warn "Failed to remove bin directory"
+  fi
+  
+  success "Consul helper scripts removed"
+}
+
+# Function to clean up Consul config files
+cleanup_consul_configs() {
+  log "Cleaning up Consul configuration files..."
+  
+  # Remove job files
+  if [ -f "${JOB_DIR}/consul.hcl" ]; then
+    rm -f "${JOB_DIR}/consul.hcl" || warn "Failed to remove consul.hcl"
+    log "Removed consul.hcl"
+  fi
+  
+  if [ -f "${JOB_DIR}/consul.reference" ]; then
+    rm -f "${JOB_DIR}/consul.reference" || warn "Failed to remove consul.reference"
+    log "Removed consul.reference"
+  fi
+  
+  # Remove DNS integration
+  if [ -f "${CONFIG_DIR}/10-consul" ]; then
+    rm -f "${CONFIG_DIR}/10-consul" || warn "Failed to remove 10-consul"
+    log "Removed 10-consul config backup"
+  fi
+  
+  # Remove utility scripts if they exist
+  for i in {a..d}; do
+    if [ -f "${SCRIPT_DIR}/03${i}-consul-utils.sh" ]; then
+      rm -f "${SCRIPT_DIR}/03${i}-consul-utils.sh" || warn "Failed to remove 03${i}-consul-utils.sh"
+      log "Removed 03${i}-consul-utils.sh"
+    fi
+  done
+  
+  success "Consul configuration files cleaned up"
+}
+
+# Function to uninstall Consul
+uninstall_consul() {
+  echo -e "\n${GREEN}==========================================================${NC}"
+  echo -e "${GREEN}              Uninstalling Consul Components             ${NC}"
+  echo -e "${GREEN}==========================================================${NC}"
+  
+  # Confirm before proceeding
+  if confirm "This will uninstall Consul, remove all related configuration files, and purge Nomad jobs. Continue?"; then
+    # Stop Consul completely
+    stop_consul
+    
+    # Remove Consul helper scripts
+    remove_consul_scripts
+    
+    # Clean up Consul configuration files
+    cleanup_consul_configs
+    
+    success "Consul uninstallation completed"
+  else
+    log "Consul uninstallation cancelled"
+  fi
+}
+
 # Function to fully stop all Traefik-related jobs and containers
 stop_traefik() {
-log "Performing comprehensive Traefik shutdown..."
+    log "Performing comprehensive Traefik shutdown..."
     
     # Load Nomad token if available
     if [ -f "${PARENT_DIR}/config/nomad_auth.conf" ]; then
@@ -538,11 +718,16 @@ main() {
     check_nomad
     
     # Step 0: Stop Traefik job first (since it depends on Consul)
-    stop_traefik
     uninstall_traefik
 
     # Step 1: Stop Consul job
-    stop_consul
+    uninstall_consul
+
+    if grep -q "consul\.${DOMAIN:-homelab.local}" /etc/hosts; then
+        echo -e "- ${YELLOW}DNS:${NC} Consul hosts file entry preserved"
+    else
+        echo -e "- ${YELLOW}DNS:${NC} Consul hosts file entry removed"
+    fi
     
     # Step 2: Remove Traefik DNS integration
     remove_traefik_dns
