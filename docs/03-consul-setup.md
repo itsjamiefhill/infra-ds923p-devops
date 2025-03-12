@@ -25,52 +25,161 @@ The platform implements Consul in a simplified single-server mode appropriate fo
 
 ## Synology-Specific Deployment Method
 
-Due to challenges with Nomad on Synology devices, Consul is deployed directly as a Docker container rather than as a Nomad job. This provides greater control and reliability for this critical service.
+Consul is now deployed as a Nomad job on Synology devices. The `03-deploy-consul.sh` script has been updated to enable Nomad deployment while addressing Synology-specific considerations.
 
-### Direct Docker Deployment
+### Nomad Deployment Architecture
 
-The `03-deploy-consul.sh` script creates and uses helper scripts to manage the Consul container:
+The deployment method has been improved in the following ways:
 
-1. **Helper Scripts**:
-   - `bin/start-consul.sh`: Script to start the Consul container
-   - `bin/stop-consul.sh`: Script to stop the Consul container
+1. **Modular Script Structure**:
+   - `03-deploy-consul.sh`: Main deployment script
+   - `03a-consul-utils.sh`: Core utility functions
+   - `03b-consul-utils.sh`: Directory and job configuration
+   - `03c-consul-utils.sh`: Deployment functions
+   - `03d-consul-utils.sh`: Helper functions
 
-2. **Container Configuration**:
-   ```bash
-   sudo docker run -d --name consul \
-     --restart always \
-     --network host \
-     -v ${DATA_DIR}/consul_data:/consul/data \
-     hashicorp/consul:${CONSUL_VERSION} \
-     agent -server -bootstrap \
-     -bind=${PRIMARY_IP} \
-     -advertise=${PRIMARY_IP} \
-     -client=0.0.0.0 \
-     -ui
-   ```
+2. **Docker Volume Integration**:
+   - Uses direct Docker volume mounts instead of Nomad volumes
+   - Handles Synology's limitation where host volume types aren't supported
+   - Ensures data persistence across restarts
 
-3. **Network Mode**:
-   - Uses `--network host` to share the host's network stack
-   - Avoids port mapping and network isolation issues
+3. **Authentication Handling**:
+   - Proper support for Nomad tokens
+   - Saves tokens in a configuration file for reuse
+   - Fallback mechanisms when authentication fails
 
-4. **IP Configuration**:
-   - Explicitly sets `-bind` and `-advertise` parameters to handle multiple network interfaces
-   - Uses a primary IP detection mechanism to find the correct interface
+4. **Enhanced Error Handling**:
+   - Comprehensive Docker permission checks
+   - Automatic permission fixes where possible
+   - Fallback to Docker container deployment if Nomad deployment fails
 
-5. **Automatic Startup**:
-   - Instructions for creating a Synology Task Scheduler entry to auto-start Consul on boot
+5. **Helper Scripts**:
+   - `bin/start-consul.sh`: Script to start the Consul Nomad job
+   - `bin/stop-consul.sh`: Script to stop the Consul Nomad job
+   - `bin/consul-status.sh`: Script to check Consul status
+   - `bin/consul-troubleshoot.sh`: Script for troubleshooting (available with fallback option)
 
-### Reference Configuration
+### Nomad Job Configuration
 
-The deployment creates a reference file at `$JOB_DIR/consul.reference` with information about the Consul deployment:
+The Consul Nomad job is defined with these key configurations:
+
+```hcl
+job "consul" {
+  datacenters = ["dc1"]
+  type        = "service"
+  
+  priority = 100
+  
+  group "consul" {
+    count = 1
+    
+    network {
+      mode = "host"
+      
+      port "http" {
+        static = 8500
+        to     = 8500
+      }
+      
+      port "dns" {
+        static = 8600
+        to     = 8600
+      }
+      
+      port "server" {
+        static = 8300
+        to     = 8300
+      }
+      
+      port "serf_lan" {
+        static = 8301
+        to     = 8301
+      }
+      
+      port "serf_wan" {
+        static = 8302
+        to     = 8302
+      }
+    }
+    
+    task "consul" {
+      driver = "docker"
+      
+      config {
+        image = "hashicorp/consul:1.15.4"
+        network_mode = "host"
+        
+        volumes = [
+          "/volume1/docker/nomad/volumes/consul_data:/consul/data"
+        ]
+        
+        args = [
+          "agent",
+          "-server",
+          "-bootstrap",
+          "-bind=10.0.4.78",
+          "-advertise=10.0.4.78",
+          "-client=0.0.0.0",
+          "-ui"
+        ]
+      }
+      
+      resources {
+        cpu    = 500
+        memory = 512
+      }
+      
+      service {
+        name = "consul"
+        port = "http"
+        tags = [
+          "traefik.enable=true",
+          "traefik.http.routers.consul.rule=Host(`consul.homelab.local`)",
+          "traefik.http.routers.consul.entrypoints=web",
+          "homepage.name=Consul",
+          "homepage.icon=consul.png",
+          "homepage.group=Infrastructure",
+          "homepage.description=Service Discovery and Mesh"
+        ]
+        
+        check {
+          type     = "http"
+          path     = "/v1/status/leader"
+          interval = "10s"
+          timeout  = "2s"
+        }
+      }
+    }
+  }
+}
 ```
-# Note: Consul was deployed directly as a Docker container
-# To restart: sudo ${PARENT_DIR}/bin/stop-consul.sh && sudo ${PARENT_DIR}/bin/start-consul.sh
-# To stop: sudo ${PARENT_DIR}/bin/stop-consul.sh
-# To view logs: sudo docker logs consul
-# Container name: consul
-# IP address: ${PRIMARY_IP}
+
+This configuration:
+- Uses host networking for proper DNS and service discovery
+- Maps the Consul data directory for persistence
+- Configures proper health checks
+- Sets Traefik integration for HTTP access
+- Includes metadata for the Homepage dashboard
+
+### Fallback Docker Method
+
+If Nomad deployment fails, the script can generate a fallback Docker deployment method:
+
+```bash
+docker run -d \
+  --name consul \
+  --restart unless-stopped \
+  --network host \
+  -v "/volume1/docker/nomad/volumes/consul_data:/consul/data" \
+  hashicorp/consul:1.15.4 \
+  agent -server -bootstrap \
+  -bind=10.0.4.78 \
+  -advertise=10.0.4.78 \
+  -client=0.0.0.0 \
+  -ui
 ```
+
+This provides a reliable alternative when Nomad encounters issues.
 
 ## Configuration
 
@@ -230,8 +339,8 @@ For most Synology homelab setups, a single server is sufficient.
 
 Useful Consul commands for administration:
 
-- **View Consul logs**: `sudo docker logs consul`
-- **Restart Consul**: `sudo ${SCRIPT_DIR}/bin/stop-consul.sh && sudo ${SCRIPT_DIR}/bin/start-consul.sh`
+- **View Consul logs**: `sudo docker logs consul` (Docker) or `nomad alloc logs <alloc-id>` (Nomad)
+- **Restart Consul**: `${SCRIPT_DIR}/bin/stop-consul.sh && ${SCRIPT_DIR}/bin/start-consul.sh`
 - **List services**: `curl http://localhost:8500/v1/catalog/services`
 - **View nodes**: `curl http://localhost:8500/v1/catalog/nodes`
 - **Check service health**: `curl http://localhost:8500/v1/health/service/<service-name>`
@@ -245,14 +354,15 @@ Consul's status can be monitored through:
 1. **Prometheus**: Configured to scrape Consul metrics
 2. **Grafana**: Dashboards available for visualizing metrics
 3. **Consul UI**: Real-time status of services and nodes
-4. **Docker logs**: `sudo docker logs consul`
+4. **Nomad logs**: `nomad alloc logs <alloc-id>` for the consul job
 5. **Homepage Dashboard**: High-level status display
+6. **Helper Script**: `${SCRIPT_DIR}/bin/consul-status.sh` for quick status checks
 
 ## Handling DSM Updates
 
 When updating your Synology DSM:
 
-1. Consul should restart automatically due to the `--restart always` flag
+1. Consul should restart automatically via Nomad
 2. Data will persist in the mapped volume
 3. After an update, verify hosts file integration still works:
    ```bash
@@ -262,12 +372,12 @@ When updating your Synology DSM:
 
 4. Verify Consul is running:
    ```bash
-   sudo docker ps | grep consul
+   ${SCRIPT_DIR}/bin/consul-status.sh
    ```
 
 5. If needed, restart Consul:
    ```bash
-   sudo ${SCRIPT_DIR}/bin/stop-consul.sh && sudo ${SCRIPT_DIR}/bin/start-consul.sh
+   ${SCRIPT_DIR}/bin/stop-consul.sh && ${SCRIPT_DIR}/bin/start-consul.sh
    ```
 
 ## Using Consul in Your Applications
@@ -284,50 +394,68 @@ You can leverage Consul from your own applications deployed to the platform:
 
 Common issues and their solutions:
 
-1. **Consul Not Starting**:
-   - Check logs: `sudo docker logs consul`
-   - Verify data directory permissions
-   - Ensure ports are available
-
-2. **Multiple Private IPv4 Addresses Found**:
-   - Problem: Consul cannot determine which network interface to use
-   - Solution: Explicitly set bind and advertise parameters:
+1. **"Permission denied" When Running Nomad Job**:
+   - **Cause**: The nomad user doesn't have the necessary permissions to access Docker
+   - **Solution**: Fix Docker permissions
      ```bash
-     # Get your primary IP
-     PRIMARY_IP=$(ip route get 1 | awk '{print $7;exit}')
-     
-     # Start Consul with explicit binding
-     sudo docker run -d --name consul \
-       --restart always \
-       --network host \
-       -v ${DATA_DIR}/consul_data:/consul/data \
-       hashicorp/consul:${CONSUL_VERSION} \
-       agent -server -bootstrap \
-       -bind=${PRIMARY_IP} \
-       -advertise=${PRIMARY_IP} \
-       -client=0.0.0.0 \
-       -ui
+     sudo synogroup --add docker  # create docker group if needed
+     sudo synogroup --member docker nomad  # add nomad user to docker group
+     sudo chown root:docker /var/run/docker.sock  # fix socket permissions
      ```
+   - Then restart Nomad and retry
 
-3. **Services Not Registering**:
-   - Check if services have Consul service blocks
-   - Verify network connectivity between services and Consul
-   - Inspect service tags and configuration
+2. **"unknown volume type: host" Error**:
+   - **Cause**: Synology Nomad doesn't support host volume type registration
+   - **Solution**: The updated script uses direct Docker volume mounts instead of Nomad volumes
 
-4. **DNS Resolution Failures**:
-   - Verify hosts file entry: `cat /etc/hosts | grep consul`
-   - Test direct query to Consul: `curl -v http://consul.service.consul:8500/ui/`
-   - Test direct DNS query: `dig @127.0.0.1 -p 8600 consul.service.consul`
-   - Use alternative DNS testing methods on Synology:
-     ```bash
-     # Using Docker for DNS testing
-     sudo docker run --rm --network host alpine sh -c "apk add --no-cache bind-tools && dig @127.0.0.1 -p 8600 consul.service.consul"
-     ```
+3. **Data Not Persisting**:
+   - Verify the volume mount path in the job definition is correct
+   - Check that the host directory exists with proper permissions
+   - Ensure the container is writing to the mounted path
 
-5. **UI Not Accessible**:
-   - Verify Consul is running: `sudo docker ps | grep consul`
-   - Check direct IP access: `curl -v http://localhost:8500/ui/`
-   - Check if hosts file resolution works: `ping consul.service.consul`
+4. **Permission Issues**:
+   - Verify container user has access to the mounted directory
+   - Check if ownership is set correctly on the host: `sudo chown -R <uid>:<gid> $DATA_DIR/consul_data`
+   - Ensure that the required permissions are applied to the volume
+
+5. **Cannot Access Volume Data**:
+   - Check if the directory exists: `ls -la $DATA_DIR/consul_data`
+   - Verify the path in your job definition
+   - Check for typos in the volume mount path
+
+6. **Nomad Authentication Failures**:
+   - Ensure your Nomad token has appropriate permissions
+   - Check that the token is valid and not expired
+   - Use the proper authentication method for your Nomad setup
+
+## Uninstallation
+
+To uninstall Consul:
+
+1. **Stop and Remove Container/Job**:
+   ```bash
+   ${SCRIPT_DIR}/bin/stop-consul.sh
+   ```
+
+2. **Remove Data (Optional)**:
+   ```bash
+   sudo rm -rf ${DATA_DIR}/consul_data
+   ```
+
+3. **Remove DNS Integration**:
+   ```bash
+   sudo sed -i '/consul\.service\.consul/d' /etc/hosts
+   sudo rm -f /etc/dnsmasq.conf.d/10-consul
+   ```
+
+4. **Remove Helper Scripts**:
+   ```bash
+   rm -f ${PARENT_DIR}/bin/start-consul.sh
+   rm -f ${PARENT_DIR}/bin/stop-consul.sh
+   rm -f ${PARENT_DIR}/bin/consul-status.sh
+   ```
+
+For complete uninstallation, you can also use the updated `uninstall.sh` script which now properly handles Consul cleanup.
 
 ## Next Steps
 
