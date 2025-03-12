@@ -99,20 +99,6 @@ stop_consul() {
     fi
 }
 
-# Function to stop Traefik job
-stop_traefik() {
-    log "Stopping Traefik job..."
-    
-    # Check if Traefik job exists in Nomad and stop it
-    if nomad job status traefik &>/dev/null; then
-        nomad job stop -purge traefik || warn "Failed to stop Traefik job"
-        sleep 5 # Give Nomad time to stop the job
-        success "Traefik job stopped and purged"
-    else
-        log "Traefik job not found or already stopped"
-    fi
-}
-
 # Function to remove Consul DNS configuration
 remove_consul_dns() {
     log "Removing Consul DNS integration..."
@@ -337,6 +323,202 @@ show_summary() {
     echo -e "\n${GREEN}==========================================================${NC}"
 }
 
+# Function to fully stop all Traefik-related jobs and containers
+stop_traefik() {
+log "Performing comprehensive Traefik shutdown..."
+    
+    # Load Nomad token if available
+    if [ -f "${PARENT_DIR}/config/nomad_auth.conf" ]; then
+        source "${PARENT_DIR}/config/nomad_auth.conf"
+        export NOMAD_TOKEN
+        log "Loaded Nomad authentication token"
+    else
+        warn "No Nomad authentication token found. You may need to provide one."
+        echo -e "${YELLOW}Please enter your Nomad management token (leave empty to skip Nomad operations):${NC}"
+        read -r NOMAD_TOKEN
+        if [ -n "${NOMAD_TOKEN}" ]; then
+            export NOMAD_TOKEN
+            log "Using provided Nomad token"
+        else
+            warn "No token provided. Will skip Nomad API operations."
+        fi
+    fi
+    
+    # 1. Try to stop Traefik job in Nomad if we have a token
+    if [ -n "${NOMAD_TOKEN}" ]; then
+        log "Checking for Traefik job in Nomad..."
+        
+        # Test the token first
+        if curl -s -f -H "X-Nomad-Token: ${NOMAD_TOKEN}" "${NOMAD_ADDR:-http://127.0.0.1:4646}/v1/jobs" &>/dev/null; then
+            log "Successfully authenticated with Nomad API"
+            
+            # Stop the Traefik job if it exists
+            job_exists=$(curl -s -H "X-Nomad-Token: ${NOMAD_TOKEN}" "${NOMAD_ADDR:-http://127.0.0.1:4646}/v1/job/traefik" | grep -v "job not found" || echo "")
+            if [ -n "$job_exists" ]; then
+                log "Found Traefik job, stopping with API..."
+                curl -s -X DELETE -H "X-Nomad-Token: ${NOMAD_TOKEN}" "${NOMAD_ADDR:-http://127.0.0.1:4646}/v1/job/traefik?purge=true"
+                log "Traefik job purged via API"
+                sleep 5
+            else
+                log "Traefik job not found in Nomad"
+            fi
+            
+            # Find all jobs with traefik in the name using the API
+            log "Searching for any Traefik-related jobs..."
+            all_jobs=$(curl -s -H "X-Nomad-Token: ${NOMAD_TOKEN}" "${NOMAD_ADDR:-http://127.0.0.1:4646}/v1/jobs" | grep -o '"ID":"[^"]*"' | cut -d'"' -f4)
+            for job in $all_jobs; do
+                if echo "$job" | grep -qi traefik; then
+                    log "Stopping job: $job"
+                    curl -s -X DELETE -H "X-Nomad-Token: ${NOMAD_TOKEN}" "${NOMAD_ADDR:-http://127.0.0.1:4646}/v1/job/$job?purge=true"
+                    log "Job $job purged via API"
+                    sleep 2
+                fi
+            done
+        else
+            warn "Authentication with Nomad API failed. Token may be invalid."
+            warn "Will proceed to docker container cleanup only."
+        fi
+    else
+        warn "Skipping Nomad API operations due to missing token."
+    fi
+    
+    # 2. Find and stop all Docker containers with "traefik" in their name
+    log "Stopping all Traefik Docker containers..."
+    traefik_containers=$(sudo docker ps -a | grep -i traefik | awk '{print $1}')
+    if [ -n "$traefik_containers" ]; then
+        for container in $traefik_containers; do
+            log "Stopping Docker container: $container"
+            sudo docker stop "$container" && sudo docker rm "$container"
+        done
+        success "All Traefik containers stopped and removed"
+    else
+        log "No Traefik containers found"
+    fi
+    
+    # 3. Kill any remaining traefik processes
+    log "Checking for lingering Traefik processes..."
+    traefik_pids=$(ps aux | grep -i [t]raefik | awk '{print $2}')
+    if [ -n "$traefik_pids" ]; then
+        for pid in $traefik_pids; do
+            log "Killing process: $pid"
+            sudo kill -9 "$pid" || warn "Failed to kill process $pid"
+        done
+    fi
+    
+    # 4. Verify Docker cleanup
+    log "Verifying Docker cleanup..."
+    if sudo docker ps | grep -qi traefik; then
+        warn "Some Traefik containers are still running. You may need to stop them manually."
+    else
+        log "No Traefik containers running"
+    fi
+    
+    # 5. Ensure Traefik doesn't restart by disabling auto-restart
+    log "Checking for container restart policies..."
+    restart_containers=$(sudo docker ps -a --filter "restart=always" | grep -i traefik | awk '{print $1}')
+    if [ -n "$restart_containers" ]; then
+        for container in $restart_containers; do
+            log "Updating restart policy for container: $container"
+            sudo docker update --restart=no "$container" || warn "Failed to update restart policy"
+        done
+    fi
+    
+    # 6. As last resort, manually remove any Docker container that might contain "traefik"
+    log "Forcing removal of any remaining Traefik containers..."
+    sudo docker ps -a | grep -i traefik | awk '{print $1}' | xargs -r sudo docker rm -f
+    
+    success "Traefik shutdown completed"
+}
+
+# Function to remove Traefik bin scripts
+remove_traefik_scripts() {
+    log "Removing Traefik helper scripts..."
+    
+    # List of Traefik scripts to remove
+    SCRIPTS=(
+        "start-traefik.sh"
+        "stop-traefik.sh"
+        "traefik-status.sh"
+        "traefik-troubleshoot.sh"
+        "traefik-docker-run.sh"
+        "traefik-docker-stop.sh"
+    )
+    
+    for script in "${SCRIPTS[@]}"; do
+        if [ -f "${PARENT_DIR}/bin/${script}" ]; then
+            rm -f "${PARENT_DIR}/bin/${script}" || warn "Failed to remove ${script}"
+            log "Removed ${script}"
+        fi
+    done
+    
+    success "Traefik helper scripts removed"
+}
+
+# Function to clean up Traefik config files
+cleanup_traefik_configs() {
+    log "Cleaning up Traefik configuration files..."
+    
+    # Remove job files
+    if [ -f "${JOB_DIR}/traefik.hcl" ]; then
+        rm -f "${JOB_DIR}/traefik.hcl" || warn "Failed to remove traefik.hcl"
+        log "Removed traefik.hcl"
+    fi
+    
+    # Remove generated traefik config directory if it exists
+    if [ -d "${PARENT_DIR}/config/traefik" ]; then
+        rm -rf "${PARENT_DIR}/config/traefik" || warn "Failed to remove traefik config directory"
+        log "Removed traefik config directory"
+    fi
+    
+    # Remove utility scripts if they exist
+    for i in {a..e}; do
+        if [ -f "${SCRIPT_DIR}/04${i}-traefik-utils.sh" ]; then
+            rm -f "${SCRIPT_DIR}/04${i}-traefik-utils.sh" || warn "Failed to remove 04${i}-traefik-utils.sh"
+            log "Removed 04${i}-traefik-utils.sh"
+        fi
+    done
+    
+    success "Traefik configuration files cleaned up"
+}
+
+# Main uninstall function
+uninstall_traefik() {
+    echo -e "\n${GREEN}==========================================================${NC}"
+    echo -e "${GREEN}              Uninstalling Traefik Components             ${NC}"
+    echo -e "${GREEN}==========================================================${NC}"
+    
+    # Confirm before proceeding
+    if confirm "This will uninstall Traefik, remove all related configuration files, and purge Nomad jobs. Continue?"; then
+        # Stop Traefik job
+        stop_traefik
+        
+        # Remove Traefik helper scripts
+        remove_traefik_scripts
+        
+        # Clean up Traefik configuration files
+        cleanup_traefik_configs
+        
+        # Optionally remove certificates
+        if confirm "Do you want to remove the wildcard certificates from the certificates directory?"; then
+            if [ -f "${DATA_DIR}/certificates/wildcard.crt" ]; then
+                rm -f "${DATA_DIR}/certificates/wildcard.crt" || warn "Failed to remove wildcard.crt"
+                log "Removed wildcard certificate"
+            fi
+            
+            if [ -f "${DATA_DIR}/certificates/wildcard.key" ]; then
+                rm -f "${DATA_DIR}/certificates/wildcard.key" || warn "Failed to remove wildcard.key"
+                log "Removed wildcard key"
+            fi
+        else
+            log "Keeping wildcard certificates"
+        fi
+        
+        success "Traefik uninstallation completed"
+    else
+        log "Traefik uninstallation cancelled"
+    fi
+}
+
 # Main function
 main() {
     echo -e "${GREEN}==========================================================${NC}"
@@ -357,7 +539,8 @@ main() {
     
     # Step 0: Stop Traefik job first (since it depends on Consul)
     stop_traefik
-    
+    uninstall_traefik
+
     # Step 1: Stop Consul job
     stop_consul
     
