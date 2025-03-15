@@ -32,6 +32,63 @@ prepare_consul_directory() {
   fi
 }
 
+# Function to prepare SSL certificates for Consul
+prepare_consul_ssl() {
+  log "Preparing SSL certificates for Consul..."
+  
+  # Check if SSL for Consul is enabled in config
+  if [ "${CONSUL_ENABLE_SSL:-false}" != "true" ]; then
+    log "Consul SSL is not enabled in configuration. Skipping."
+    return 0
+  fi
+  
+  # Create directory for Consul certificates
+  mkdir -p "${DATA_DIR}/certificates/consul" 2>/dev/null || sudo mkdir -p "${DATA_DIR}/certificates/consul"
+  
+  # Copy certificates from source location
+  if [ -f "${PARENT_DIR}/certs/fullchain.pem" ] && [ -f "${PARENT_DIR}/certs/privkey.pem" ]; then
+    cp "${PARENT_DIR}/certs/fullchain.pem" "${DATA_DIR}/certificates/consul/ca.pem" 2>/dev/null || \
+    sudo cp "${PARENT_DIR}/certs/fullchain.pem" "${DATA_DIR}/certificates/consul/ca.pem"
+    
+    cp "${PARENT_DIR}/certs/cert.pem" "${DATA_DIR}/certificates/consul/server.pem" 2>/dev/null || \
+    sudo cp "${PARENT_DIR}/certs/cert.pem" "${DATA_DIR}/certificates/consul/server.pem"
+    
+    cp "${PARENT_DIR}/certs/privkey.pem" "${DATA_DIR}/certificates/consul/server-key.pem" 2>/dev/null || \
+    sudo cp "${PARENT_DIR}/certs/privkey.pem" "${DATA_DIR}/certificates/consul/server-key.pem"
+    
+    # Set appropriate permissions
+    sudo chmod 644 "${DATA_DIR}/certificates/consul/ca.pem" 2>/dev/null
+    sudo chmod 644 "${DATA_DIR}/certificates/consul/server.pem" 2>/dev/null
+    sudo chmod 600 "${DATA_DIR}/certificates/consul/server-key.pem" 2>/dev/null
+    
+    success "SSL certificates prepared for Consul"
+  else
+    warn "SSL certificates not found at expected locations. Consul will run without SSL."
+    # Set flag to disable SSL for this run
+    CONSUL_ENABLE_SSL="false"
+    return 1
+  fi
+  
+  # Create TLS configuration for Consul
+  mkdir -p "${CONFIG_DIR}/consul" 2>/dev/null || sudo mkdir -p "${CONFIG_DIR}/consul"
+  cat > "${CONFIG_DIR}/consul/tls.json" << EOF
+{
+  "verify_incoming": true,
+  "verify_outgoing": true,
+  "verify_server_hostname": true,
+  "ca_file": "/consul/config/certs/ca.pem",
+  "cert_file": "/consul/config/certs/server.pem",
+  "key_file": "/consul/config/certs/server-key.pem",
+  "auto_encrypt": {
+    "allow_tls": true
+  }
+}
+EOF
+
+  success "TLS configuration created for Consul"
+  return 0
+}
+
 # Create Consul configuration for Nomad deployment
 create_consul_job() {
   log "Creating Consul job configuration..."
@@ -48,7 +105,18 @@ create_consul_job() {
   # Ensure job directory exists
   mkdir -p "${JOB_DIR}"
   
-  # Generate Consul job file with direct volume mount (not using Nomad volumes)
+  # Check if SSL is enabled for Consul
+  if [ "${CONSUL_ENABLE_SSL:-false}" = "true" ]; then
+    log "Configuring Consul job with SSL support..."
+    CONSUL_ARGS="agent -server -bootstrap -bind=${CONSUL_BIND_ADDR} -advertise=${CONSUL_ADVERTISE_ADDR} -client=0.0.0.0 -ui -config-file=/consul/config/tls.json"
+    CONSUL_SSL_MOUNTS=",\n        mount {\n          type = \"bind\"\n          source = \"${CONFIG_DIR}/consul\"\n          target = \"/consul/config\"\n          readonly = true\n        },\n        mount {\n          type = \"bind\"\n          source = \"${DATA_DIR}/certificates/consul\"\n          target = \"/consul/config/certs\"\n          readonly = true\n        }"
+  else
+    log "Configuring Consul job without SSL support..."
+    CONSUL_ARGS="\"agent\", \"-server\", \"-bootstrap\", \"-bind=${CONSUL_BIND_ADDR}\", \"-advertise=${CONSUL_ADVERTISE_ADDR}\", \"-client=0.0.0.0\", \"-ui\""
+    CONSUL_SSL_MOUNTS=""
+  fi
+  
+  # Generate Consul job file with mount directive (not using volumes array)
   cat > $JOB_DIR/consul.hcl << EOF
 job "consul" {
   datacenters = ["dc1"]
@@ -95,19 +163,16 @@ job "consul" {
         image = "hashicorp/consul:${CONSUL_VERSION}"
         network_mode = "host"
         
-        # Map the volume directly for Synology compatibility
-        volumes = [
-          "${DATA_DIR}/consul_data:/consul/data"
-        ]
+        # Use mount directive for data persistence
+        mount {
+          type = "bind"
+          source = "${DATA_DIR}/consul_data"
+          target = "/consul/data"
+          readonly = false
+        }${CONSUL_SSL_MOUNTS}
         
         args = [
-          "agent",
-          "-server",
-          "-bootstrap",
-          "-bind=${CONSUL_BIND_ADDR}",
-          "-advertise=${CONSUL_ADVERTISE_ADDR}",
-          "-client=0.0.0.0",
-          "-ui"
+          ${CONSUL_ARGS}
         ]
       }
       
@@ -154,10 +219,10 @@ create_helper_scripts() {
   # Create directory for scripts
   mkdir -p "${PARENT_DIR}/bin"
   
-  # Create start script with auth
+  # Create start script with auth and SSL support
   cat > "${PARENT_DIR}/bin/start-consul.sh" << EOF
 #!/bin/bash
-# Helper script to start Consul with Nomad authentication
+# Helper script to start Consul with Nomad authentication and SSL
 
 # Load Nomad token if available
 if [ -f "${PARENT_DIR}/config/nomad_auth.conf" ]; then
@@ -165,13 +230,16 @@ if [ -f "${PARENT_DIR}/config/nomad_auth.conf" ]; then
   export NOMAD_TOKEN
 fi
 
-# Set Nomad address
-export NOMAD_ADDR="${NOMAD_ADDR:-http://127.0.0.1:4646}"
+# Set Nomad SSL environment
+export NOMAD_ADDR=https://127.0.0.1:4646
+export NOMAD_CACERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem
+export NOMAD_CLIENT_CERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem
+export NOMAD_CLIENT_KEY=/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem
 
 echo "Attempting to start Consul..."
 if [ -n "\${NOMAD_TOKEN}" ]; then
   # Try with token
-  NOMAD_TOKEN="\${NOMAD_TOKEN}" nomad job run "${JOB_DIR}/consul.hcl" && echo "Consul job started successfully via CLI" && exit 0
+  nomad job run "${JOB_DIR}/consul.hcl" && echo "Consul job started successfully via CLI" && exit 0
 else
   # Try without token
   nomad job run "${JOB_DIR}/consul.hcl" && echo "Consul job started successfully" && exit 0
@@ -184,10 +252,10 @@ echo "  sudo chown root:docker /var/run/docker.sock"
 exit 1
 EOF
   
-  # Create stop script with auth
+  # Create stop script with auth and SSL support
   cat > "${PARENT_DIR}/bin/stop-consul.sh" << EOF
 #!/bin/bash
-# Helper script to stop Consul with Nomad authentication
+# Helper script to stop Consul with Nomad authentication and SSL
 
 # Load Nomad token if available
 if [ -f "${PARENT_DIR}/config/nomad_auth.conf" ]; then
@@ -195,13 +263,16 @@ if [ -f "${PARENT_DIR}/config/nomad_auth.conf" ]; then
   export NOMAD_TOKEN
 fi
 
-# Set Nomad address
-export NOMAD_ADDR="${NOMAD_ADDR:-http://127.0.0.1:4646}"
+# Set Nomad SSL environment
+export NOMAD_ADDR=https://127.0.0.1:4646
+export NOMAD_CACERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem
+export NOMAD_CLIENT_CERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem
+export NOMAD_CLIENT_KEY=/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem
 
 echo "Attempting to stop Consul..."
 if [ -n "\${NOMAD_TOKEN}" ]; then
   # Try with CLI
-  NOMAD_TOKEN="\${NOMAD_TOKEN}" nomad job stop -purge consul && echo "Consul job stopped successfully via CLI" && exit 0
+  nomad job stop -purge consul && echo "Consul job stopped successfully via CLI" && exit 0
 else
   # Try without token
   nomad job stop -purge consul && echo "Consul job stopped successfully" && exit 0
@@ -211,10 +282,10 @@ echo "Failed to stop Consul job through Nomad. Check your authentication."
 exit 1
 EOF
   
-  # Create status script with auth
+  # Create status script with auth and SSL support
   cat > "${PARENT_DIR}/bin/consul-status.sh" << EOF
 #!/bin/bash
-# Helper script to check Consul status with Nomad authentication
+# Helper script to check Consul status with Nomad authentication and SSL
 
 # Load Nomad token if available
 if [ -f "${PARENT_DIR}/config/nomad_auth.conf" ]; then
@@ -222,15 +293,18 @@ if [ -f "${PARENT_DIR}/config/nomad_auth.conf" ]; then
   export NOMAD_TOKEN
 fi
 
-# Set Nomad address
-export NOMAD_ADDR="${NOMAD_ADDR:-http://127.0.0.1:4646}"
+# Set Nomad SSL environment
+export NOMAD_ADDR=https://127.0.0.1:4646
+export NOMAD_CACERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem
+export NOMAD_CLIENT_CERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem
+export NOMAD_CLIENT_KEY=/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem
 
 echo "Checking Consul status..."
 
 # Check status via CLI with token if available
 if [ -n "\${NOMAD_TOKEN}" ]; then
   echo "Checking via Nomad CLI with token..."
-  NOMAD_TOKEN="\${NOMAD_TOKEN}" nomad job status consul
+  nomad job status consul
 else
   # Try without token via CLI
   echo "Checking via Nomad CLI without token..."
@@ -276,6 +350,25 @@ else
   echo "   Run these commands to fix Docker permissions:"
   echo "     sudo synogroup --member docker nomad"
   echo "     sudo chown root:docker /var/run/docker.sock"
+fi
+
+# Check SSL configuration if enabled
+if [ "${CONSUL_ENABLE_SSL:-false}" = "true" ]; then
+  echo ""
+  echo "Checking Consul SSL configuration..."
+  if [ -f "${DATA_DIR}/certificates/consul/ca.pem" ] && \
+     [ -f "${DATA_DIR}/certificates/consul/server.pem" ] && \
+     [ -f "${DATA_DIR}/certificates/consul/server-key.pem" ]; then
+    echo "✅ Consul SSL certificates are in place"
+  else
+    echo "❌ Consul SSL certificates are missing"
+  fi
+  
+  if [ -f "${CONFIG_DIR}/consul/tls.json" ]; then
+    echo "✅ Consul TLS configuration exists"
+  else
+    echo "❌ Consul TLS configuration is missing"
+  fi
 fi
 
 exit 0

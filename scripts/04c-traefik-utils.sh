@@ -47,11 +47,27 @@ job "traefik" {
         image = "traefik:${TRAEFIK_VERSION}"
         ports = ["http", "https", "admin"]
         
-        volumes = [
-          "local/traefik.toml:/etc/traefik/traefik.toml",
-          "local/dynamic:/etc/traefik/dynamic",
-          "${DATA_DIR}/certificates:/etc/traefik/certs:ro"
-        ]
+        # Using mount directive instead of volumes for better compatibility
+        mount {
+          type = "bind"
+          source = "local/traefik.toml"
+          target = "/etc/traefik/traefik.toml"
+          readonly = true
+        }
+        
+        mount {
+          type = "bind"
+          source = "local/dynamic"
+          target = "/etc/traefik/dynamic"
+          readonly = false
+        }
+        
+        mount {
+          type = "bind"
+          source = "${DATA_DIR}/certificates"
+          target = "/etc/traefik/certs"
+          readonly = true
+        }
       }
 
       template {

@@ -22,10 +22,11 @@ The platform implements Consul in a simplified single-server mode appropriate fo
 - **DNS Interface**: Provides service.consul domain resolution
 - **UI**: Web interface for service management
 - **Metadata**: Stores service metadata for Homepage dashboard integration
+- **Optional SSL**: Support for secure communication with TLS
 
 ## Synology-Specific Deployment Method
 
-Consul is now deployed as a Nomad job on Synology devices. The `03-deploy-consul.sh` script has been updated to enable Nomad deployment while addressing Synology-specific considerations.
+Consul is deployed as a Nomad job on Synology devices. The `03-deploy-consul.sh` script has been updated to enable Nomad deployment with SSL support while addressing Synology-specific considerations.
 
 ### Nomad Deployment Architecture
 
@@ -38,22 +39,32 @@ The deployment method has been improved in the following ways:
    - `03c-consul-utils.sh`: Deployment functions
    - `03d-consul-utils.sh`: Helper functions
 
-2. **Docker Volume Integration**:
-   - Uses direct Docker volume mounts instead of Nomad volumes
-   - Handles Synology's limitation where host volume types aren't supported
-   - Ensures data persistence across restarts
+2. **Nomad SSL Integration**:
+   - Proper support for Nomad's SSL-secured API
+   - Automatic detection and configuration of SSL environment variables
+   - Secure communication for all Nomad operations
 
-3. **Authentication Handling**:
+3. **Improved Volume Mounting**:
+   - Uses the recommended `mount` directive instead of `volumes` array
+   - More explicit and flexible configuration of bind mounts
+   - Better performance and compatibility with Synology's Nomad implementation
+
+4. **Optional Consul SSL Support**:
+   - Configurable TLS encryption for Consul communications
+   - Integration with existing Let's Encrypt certificates
+   - Secure client-server and server-server communications
+
+5. **Authentication Handling**:
    - Proper support for Nomad tokens
    - Saves tokens in a configuration file for reuse
    - Fallback mechanisms when authentication fails
 
-4. **Enhanced Error Handling**:
+6. **Enhanced Error Handling**:
    - Comprehensive Docker permission checks
    - Automatic permission fixes where possible
    - Fallback to Docker container deployment if Nomad deployment fails
 
-5. **Helper Scripts**:
+7. **Helper Scripts**:
    - `bin/start-consul.sh`: Script to start the Consul Nomad job
    - `bin/stop-consul.sh`: Script to stop the Consul Nomad job
    - `bin/consul-status.sh`: Script to check Consul status
@@ -109,9 +120,28 @@ job "consul" {
         image = "hashicorp/consul:1.15.4"
         network_mode = "host"
         
-        volumes = [
-          "/volume1/docker/nomad/volumes/consul_data:/consul/data"
-        ]
+        # Use mount directive instead of volumes array
+        mount {
+          type = "bind"
+          source = "/volume1/docker/nomad/volumes/consul_data"
+          target = "/consul/data"
+          readonly = false
+        }
+        
+        # SSL configuration mounts (when enabled)
+        mount {
+          type = "bind"
+          source = "/volume1/docker/nomad/config/consul"
+          target = "/consul/config"
+          readonly = true
+        }
+        
+        mount {
+          type = "bind"
+          source = "/volume1/docker/nomad/volumes/certificates/consul"
+          target = "/consul/config/certs"
+          readonly = true
+        }
         
         args = [
           "agent",
@@ -120,7 +150,8 @@ job "consul" {
           "-bind=10.0.4.78",
           "-advertise=10.0.4.78",
           "-client=0.0.0.0",
-          "-ui"
+          "-ui",
+          "-config-file=/consul/config/tls.json"  # When SSL is enabled
         ]
       }
       
@@ -156,10 +187,11 @@ job "consul" {
 
 This configuration:
 - Uses host networking for proper DNS and service discovery
-- Maps the Consul data directory for persistence
+- Uses the `mount` directive for persistent storage and configuration
 - Configures proper health checks
 - Sets Traefik integration for HTTP access
 - Includes metadata for the Homepage dashboard
+- Supports optional SSL configuration
 
 ### Fallback Docker Method
 
@@ -171,15 +203,18 @@ docker run -d \
   --restart unless-stopped \
   --network host \
   -v "/volume1/docker/nomad/volumes/consul_data:/consul/data" \
+  -v "/volume1/docker/nomad/config/consul:/consul/config" \
+  -v "/volume1/docker/nomad/volumes/certificates/consul:/consul/config/certs" \
   hashicorp/consul:1.15.4 \
   agent -server -bootstrap \
   -bind=10.0.4.78 \
   -advertise=10.0.4.78 \
   -client=0.0.0.0 \
-  -ui
+  -ui \
+  -config-file=/consul/config/tls.json
 ```
 
-This provides a reliable alternative when Nomad encounters issues.
+This provides a reliable alternative when Nomad encounters issues, with the same SSL and volume configurations.
 
 ## Configuration
 
@@ -196,14 +231,36 @@ Key configuration elements for Consul include:
 | UI | enabled | Web interface available |
 | Bind Address | AUTO | IP address to bind services to |
 | Advertise Address | AUTO | IP address to advertise to other nodes |
+| Enable SSL | false | Enable TLS encryption (configurable) |
+
+### SSL Configuration
+
+To enable SSL for Consul, you can set the following variable in your `custom.conf`:
+
+```bash
+CONSUL_ENABLE_SSL=true  # Default is false
+```
+
+When SSL is enabled:
+1. The script will copy your Let's Encrypt certificates to the proper location
+2. A TLS configuration file will be created for Consul
+3. The job definition will include the necessary mounts and arguments
+4. Helper scripts will be updated to support SSL functionality
+
+The script expects the following certificate files to exist in the `./certs` directory:
+- `fullchain.pem` - Used as the CA certificate
+- `cert.pem` - Used as the server certificate
+- `privkey.pem` - Used as the server private key
 
 ## Data Persistence
 
-Consul data is persisted on the Synology NAS using a mapped Docker volume:
+Consul data is persisted on the Synology NAS using a mounted volume:
 - **Host Path**: `/volume1/docker/nomad/volumes/consul_data` (default)
 - **Container Path**: `/consul/data`
 
 This ensures that Consul's state, including service registrations and key-value pairs, is maintained across restarts and DSM updates.
+
+The use of the `mount` directive in the Nomad job definition provides better compatibility and performance than the older volumes approach.
 
 ## DNS Integration on Synology
 
@@ -271,6 +328,24 @@ For example, this is how Traefik discovers services to route:
     scheme = "http"
 ```
 
+## Nomad SSL Integration
+
+The deployment scripts now fully support Nomad with SSL enabled:
+
+1. **Environment Variables**: 
+   ```bash
+   export NOMAD_ADDR=https://127.0.0.1:4646
+   export NOMAD_CACERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem
+   export NOMAD_CLIENT_CERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem
+   export NOMAD_CLIENT_KEY=/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem
+   ```
+
+2. **Authentication**: Nomad tokens are securely stored and loaded when needed
+
+3. **API Access**: All API calls use proper SSL certificate verification
+
+4. **Helper Scripts**: All scripts are configured for SSL by default
+
 ## Homepage Dashboard Integration
 
 For the Homepage dashboard, services register with additional metadata:
@@ -303,6 +378,8 @@ You can access Consul through multiple interfaces:
 4. **Command Line**: Using the Consul CLI (if installed)
 5. **Host Entry**: If you've added the hosts file entry, simply `http://consul.service.consul:8500`
 
+When SSL is enabled, HTTPS endpoints are also available.
+
 ## Memory Optimization for Synology
 
 Since the DS923+ has 32GB RAM, you can optimize Consul's memory usage:
@@ -318,9 +395,9 @@ This provides ample memory for Consul while leaving resources for other services
 
 The default setup is optimized for ease of use in a homelab environment. For enhanced security:
 
-1. **Integration with Vault**: Configure Consul to use Vault for secret storage
-2. **Enable ACLs**: Configure access control lists
-3. **Enable TLS**: Secure communications with certificates
+1. **Enable SSL**: Set `CONSUL_ENABLE_SSL=true` in your custom.conf
+2. **Integration with Vault**: Configure Consul to use Vault for secret storage
+3. **Enable ACLs**: Configure access control lists
 4. **Set Agent Tokens**: Use tokens for agent communications
 
 To implement these enhancements, add the appropriate configuration to your `custom.conf` file.
@@ -404,26 +481,45 @@ Common issues and their solutions:
      ```
    - Then restart Nomad and retry
 
-2. **"unknown volume type: host" Error**:
-   - **Cause**: Synology Nomad doesn't support host volume type registration
-   - **Solution**: The updated script uses direct Docker volume mounts instead of Nomad volumes
+2. **Nomad SSL Certificate Issues**:
+   - **Cause**: SSL certificates not found or permissions issues
+   - **Solution**: Verify environment variables and certificate paths
+     ```bash
+     echo $NOMAD_CACERT
+     ls -la $NOMAD_CACERT
+     sudo chmod 644 $NOMAD_CACERT  # Ensure cert is readable
+     ```
 
-3. **Data Not Persisting**:
-   - Verify the volume mount path in the job definition is correct
+3. **Consul SSL Configuration Failure**:
+   - **Cause**: Let's Encrypt certificates not found or copied correctly
+   - **Solution**: Verify certificates exist and are readable
+     ```bash
+     ls -la ${SCRIPT_DIR}/certs/
+     ls -la ${DATA_DIR}/certificates/consul/
+     # Manually copy if needed
+     sudo cp ${SCRIPT_DIR}/certs/fullchain.pem ${DATA_DIR}/certificates/consul/ca.pem
+     ```
+
+4. **"unknown volume type: host" Error**:
+   - **Cause**: Synology Nomad doesn't support host volume type registration
+   - **Solution**: The updated script uses the `mount` directive instead of volumes
+
+5. **Data Not Persisting**:
+   - Verify the mount path in the job definition is correct
    - Check that the host directory exists with proper permissions
    - Ensure the container is writing to the mounted path
 
-4. **Permission Issues**:
+6. **Permission Issues**:
    - Verify container user has access to the mounted directory
    - Check if ownership is set correctly on the host: `sudo chown -R <uid>:<gid> $DATA_DIR/consul_data`
    - Ensure that the required permissions are applied to the volume
 
-5. **Cannot Access Volume Data**:
+7. **Cannot Access Volume Data**:
    - Check if the directory exists: `ls -la $DATA_DIR/consul_data`
    - Verify the path in your job definition
-   - Check for typos in the volume mount path
+   - Check for typos in the mount path
 
-6. **Nomad Authentication Failures**:
+8. **Nomad Authentication Failures**:
    - Ensure your Nomad token has appropriate permissions
    - Check that the token is valid and not expired
    - Use the proper authentication method for your Nomad setup

@@ -65,8 +65,26 @@ This document is an overview of the stage 0 manual configuration required before
    - Manual install through Package Center
    - Follow installation instructions from the repository
 
-2. **Verify Nomad Installation**
-   - Access Nomad UI at http://your-synology-ip:4646
+2. **Enable Nomad SSL**
+   - Nomad SSL certificates are stored in `/var/packages/nomad/shares/nomad/etc/certs/`
+   - Verify the following certificate files exist:
+     - `nomad-ca.pem` - CA certificate
+     - `nomad-cert.pem` - Client certificate
+     - `nomad-key.pem` - Client key
+
+3. **Configure Nomad SSL Environment Variables**
+   - Add the following to your `.bashrc` or `.bash_profile`:
+   ```bash
+   export NOMAD_ADDR=https://127.0.0.1:4646
+   export NOMAD_CACERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem
+   export NOMAD_CLIENT_CERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem
+   export NOMAD_CLIENT_KEY=/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem
+   ```
+
+4. **Verify Nomad Installation**
+   - Access Nomad UI at https://your-synology-ip:4646
+   - Note the HTTPS protocol due to SSL being enabled
+   - Accept the self-signed certificate in your browser
    - Create a management token through the UI
 
 ## Security Setup
@@ -92,6 +110,14 @@ This document is an overview of the stage 0 manual configuration required before
 2. **Create Directory for Certificates**
    ```bash
    mkdir -p /volume1/certificates
+   ```
+
+3. **Store Nomad Token Securely**
+   - Create a config file to store your Nomad token:
+   ```bash
+   mkdir -p /volume1/docker/nomad/config
+   echo 'NOMAD_TOKEN="your-management-token"' > /volume1/docker/nomad/config/nomad_auth.conf
+   chmod 600 /volume1/docker/nomad/config/nomad_auth.conf
    ```
 
 ## Directory Structure Setup
@@ -132,7 +158,9 @@ Before proceeding to Stage 1, verify:
 - [ ] DSM is updated to the latest version
 - [ ] SSH is properly configured with key authentication
 - [ ] Container Manager is installed and running
-- [ ] Nomad is installed and UI is accessible
+- [ ] Nomad is installed with SSL enabled and UI is accessible via HTTPS
+- [ ] Nomad SSL certificates exist and are accessible
+- [ ] Nomad environment variables are configured for SSL
 - [ ] All required directories are created with proper permissions
 - [ ] Network is properly configured with static IP
 - [ ] Firewall is configured with appropriate rules
@@ -141,9 +169,21 @@ Before proceeding to Stage 1, verify:
 
 Nomad uses an ACL system. Create a bootstrap token:
 
-1. **Access the Nomad UI** at http://your-synology-ip:4646
+1. **Access the Nomad UI** at https://your-synology-ip:4646
 2. **Navigate to ACL Tokens** and create a management token
-3. **Save the Secret ID** in a secure location
+3. **Save the Secret ID** in a secure location and in your nomad_auth.conf file
+
+## Testing Nomad SSL Configuration
+
+To verify your Nomad SSL configuration is working correctly:
+
+```bash
+# Test Nomad connectivity with SSL
+nomad server members
+
+# This should return a list of server members without SSL errors
+# If you see errors about certificates, verify your environment variables
+```
 
 ## Next Steps
 
@@ -166,5 +206,15 @@ Once all prerequisites are met, proceed to Stage 1 deployment by running the ins
    - Verify static IP is properly set
    - Ensure firewall rules are correctly applied
    - Test connectivity between services
+
+4. **SSL Certificate Issues**:
+   - Verify certificate paths in environment variables
+   - Check certificate permissions (should be readable by your user)
+   - Test with `curl -k https://127.0.0.1:4646/v1/agent/members` to bypass SSL verification
+
+5. **Nomad CLI Authentication Errors**:
+   - Ensure NOMAD_TOKEN is set correctly
+   - Verify SSL environment variables are correctly set
+   - Check if token has expired or been revoked
 
 For more detailed troubleshooting, refer to the [Troubleshooting Guide](troubleshooting.md).

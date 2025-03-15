@@ -39,6 +39,24 @@ error() {
   exit 1
 }
 
+# Function to set up Nomad SSL environment
+setup_nomad_ssl() {
+  log "Setting up Nomad SSL environment..."
+  
+  # Set default values for SSL environment
+  export NOMAD_ADDR=https://127.0.0.1:4646
+  export NOMAD_CACERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem
+  export NOMAD_CLIENT_CERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem
+  export NOMAD_CLIENT_KEY=/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem
+  
+  # Check if certificate files exist
+  if [ ! -f "$NOMAD_CACERT" ] || [ ! -f "$NOMAD_CLIENT_CERT" ] || [ ! -f "$NOMAD_CLIENT_KEY" ]; then
+    warn "Nomad SSL certificates not found at expected paths. SSL connections may fail."
+  else
+    success "Nomad SSL environment configured with certificates"
+  fi
+}
+
 # Get the Synology's primary IP address
 get_primary_ip() {
   # Try to determine the primary IP address
@@ -230,15 +248,33 @@ check_nomad_connectivity() {
   # Set up Nomad environment
   if [ -n "${NOMAD_ADDR}" ]; then
     log "Using configured NOMAD_ADDR: ${NOMAD_ADDR}"
-    export NOMAD_ADDR="${NOMAD_ADDR}"
   else
-    # Try to guess a reasonable default
-    export NOMAD_ADDR="http://127.0.0.1:4646"
+    # Try to guess a reasonable default - use https if SSL is configured
+    if [ -f "/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem" ]; then
+      export NOMAD_ADDR="https://127.0.0.1:4646"
+    else
+      export NOMAD_ADDR="http://127.0.0.1:4646"
+    fi
     log "NOMAD_ADDR not set, using default: ${NOMAD_ADDR}"
   fi
   
+  # Prepare curl flags for SSL if needed
+  CURL_FLAGS=""
+  if [[ "${NOMAD_ADDR}" == https://* ]]; then
+    if [ -f "/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem" ]; then
+      CURL_FLAGS="--cacert /var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem"
+      if [ -f "/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem" ] && [ -f "/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem" ]; then
+        CURL_FLAGS="${CURL_FLAGS} --cert /var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem --key /var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem"
+      fi
+      log "Using SSL certificates for Nomad API connection"
+    else
+      CURL_FLAGS="-k"
+      warn "Using insecure SSL connection mode (-k) because certificates not found"
+    fi
+  fi
+  
   # Direct API check (doesn't require authentication for basic status)
-  if curl -s -f "${NOMAD_ADDR}/v1/status/leader" &>/dev/null; then
+  if curl -s -f ${CURL_FLAGS} "${NOMAD_ADDR}/v1/status/leader" &>/dev/null; then
     log "Nomad API is reachable at ${NOMAD_ADDR}"
   else
     warn "Cannot connect to Nomad API at ${NOMAD_ADDR}"
@@ -248,7 +284,7 @@ check_nomad_connectivity() {
   
   # Try authenticated operations (will need the token)
   if [ -n "${NOMAD_TOKEN}" ]; then
-    if curl -s -f -H "X-Nomad-Token: ${NOMAD_TOKEN}" "${NOMAD_ADDR}/v1/jobs" &>/dev/null; then
+    if curl -s -f ${CURL_FLAGS} -H "X-Nomad-Token: ${NOMAD_TOKEN}" "${NOMAD_ADDR}/v1/jobs" &>/dev/null; then
       log "Successfully authenticated with Nomad API"
       return 0
     else

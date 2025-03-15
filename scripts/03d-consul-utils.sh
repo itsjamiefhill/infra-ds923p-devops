@@ -15,6 +15,14 @@ show_access_info() {
   echo -e "  * API: ${YELLOW}http://${SYNOLOGY_IP}:${CONSUL_HTTP_PORT}/v1/${NC}"
   echo -e "  * DNS: ${YELLOW}${SYNOLOGY_IP}:${CONSUL_DNS_PORT}${NC} (for .consul domains)"
   
+  # Show SSL information if enabled
+  if [ "${CONSUL_ENABLE_SSL:-false}" = "true" ]; then
+    echo -e "\n${BLUE}SSL Configuration:${NC}"
+    echo -e "  * Consul SSL: ${YELLOW}Enabled${NC}"
+    echo -e "  * Certificate location: ${YELLOW}${DATA_DIR}/certificates/consul${NC}"
+    echo -e "  * Config location: ${YELLOW}${CONFIG_DIR}/consul${NC}"
+  fi
+  
   echo -e "\n${BLUE}Management Scripts:${NC}"
   echo -e "  * Start Consul: ${YELLOW}${PARENT_DIR}/bin/start-consul.sh${NC}"
   echo -e "  * Stop Consul: ${YELLOW}${PARENT_DIR}/bin/stop-consul.sh${NC}"
@@ -23,6 +31,10 @@ show_access_info() {
   echo -e "\n${BLUE}Data Directory:${NC}"
   echo -e "  * Location: ${YELLOW}${DATA_DIR}/consul_data${NC}"
   echo -e "  * Mounted at: ${YELLOW}/consul/data${NC} in the container"
+  
+  echo -e "\n${BLUE}Nomad Integration:${NC}"
+  echo -e "  * Nomad SSL: ${YELLOW}Enabled${NC}"
+  echo -e "  * Nomad Address: ${YELLOW}${NOMAD_ADDR:-https://127.0.0.1:4646}${NC}"
   
   echo -e "\n${BLUE}Troubleshooting:${NC}"
   echo -e "  * If you encounter 'missing drivers' error, ensure Docker permissions are correct:"
@@ -39,6 +51,15 @@ create_docker_fallback() {
   log "Creating Docker fallback deployment script..."
   
   mkdir -p "${PARENT_DIR}/bin"
+  
+  # Configure SSL if enabled
+  local ssl_volumes=""
+  local ssl_args=""
+  if [ "${CONSUL_ENABLE_SSL:-false}" = "true" ]; then
+    log "Including SSL configuration in fallback script..."
+    ssl_volumes="-v \"${CONFIG_DIR}/consul:/consul/config\" -v \"${DATA_DIR}/certificates/consul:/consul/config/certs\""
+    ssl_args="-config-file=/consul/config/tls.json"
+  fi
   
   # Create the Docker run script
   cat > "${PARENT_DIR}/bin/consul-docker-run.sh" << EOF
@@ -65,12 +86,14 @@ docker run -d \\
   --restart unless-stopped \\
   --network host \\
   -v "${DATA_DIR}/consul_data:/consul/data" \\
+  ${ssl_volumes} \\
   hashicorp/consul:${CONSUL_VERSION} \\
   agent -server -bootstrap \\
   -bind=\$PRIMARY_IP \\
   -advertise=\$PRIMARY_IP \\
   -client=0.0.0.0 \\
-  -ui
+  -ui \\
+  ${ssl_args}
 
 echo "Consul started with Docker. UI available at http://localhost:${CONSUL_HTTP_PORT}"
 EOF
@@ -116,13 +139,19 @@ if command -v nomad &>/dev/null; then
   echo ""
   echo "Checking Nomad job status..."
   
+  # Set Nomad SSL environment
+  export NOMAD_ADDR=https://127.0.0.1:4646
+  export NOMAD_CACERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem
+  export NOMAD_CLIENT_CERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem
+  export NOMAD_CLIENT_KEY=/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem
+  
   # Load Nomad token if available
   if [ -f "${PARENT_DIR}/config/nomad_auth.conf" ]; then
     source "${PARENT_DIR}/config/nomad_auth.conf"
   fi
   
   if [ -n "\${NOMAD_TOKEN}" ]; then
-    NOMAD_TOKEN="\${NOMAD_TOKEN}" nomad job status consul || echo "No Consul job found in Nomad"
+    nomad job status consul || echo "No Consul job found in Nomad"
   else
     nomad job status consul || echo "No Consul job found in Nomad"
   fi
@@ -147,6 +176,27 @@ netstat -tuln | grep "${CONSUL_HTTP_PORT}\|${CONSUL_DNS_PORT}" || echo "No Consu
 echo ""
 echo "Checking DNS resolution..."
 ping -c 1 consul.service.consul &>/dev/null && echo "✅ consul.service.consul resolves correctly" || echo "❌ consul.service.consul does not resolve"
+
+# Check SSL configuration if enabled
+if [ "${CONSUL_ENABLE_SSL:-false}" = "true" ]; then
+  echo ""
+  echo "Checking Consul SSL configuration..."
+  if [ -f "${DATA_DIR}/certificates/consul/ca.pem" ] && \
+     [ -f "${DATA_DIR}/certificates/consul/server.pem" ] && \
+     [ -f "${DATA_DIR}/certificates/consul/server-key.pem" ]; then
+    echo "✅ SSL certificates exist at ${DATA_DIR}/certificates/consul/"
+  else
+    echo "❌ SSL certificates are missing from ${DATA_DIR}/certificates/consul/"
+  fi
+  
+  if [ -f "${CONFIG_DIR}/consul/tls.json" ]; then
+    echo "✅ TLS configuration exists at ${CONFIG_DIR}/consul/tls.json"
+    echo "Configuration contents:"
+    cat "${CONFIG_DIR}/consul/tls.json"
+  else
+    echo "❌ TLS configuration file is missing"
+  fi
+fi
 
 echo ""
 echo "=== End of Troubleshooting ==="

@@ -162,6 +162,7 @@ deploy_consul_nomad() {
 # To view status: ${PARENT_DIR}/bin/consul-status.sh 
 # To view logs: nomad alloc logs <allocation-id>
 # IP address: ${CONSUL_BIND_ADDR}
+# SSL enabled: ${CONSUL_ENABLE_SSL:-false}
 EOF
 
   success "Consul deployment completed"
@@ -190,6 +191,15 @@ deploy_consul_docker() {
   sudo docker stop consul 2>/dev/null || true
   sudo docker rm consul 2>/dev/null || true
   
+  # Configure SSL if enabled
+  local ssl_volumes=""
+  local ssl_args=""
+  if [ "${CONSUL_ENABLE_SSL:-false}" = "true" ]; then
+    log "Configuring Consul Docker with SSL support..."
+    ssl_volumes="-v ${CONFIG_DIR}/consul:/consul/config -v ${DATA_DIR}/certificates/consul:/consul/config/certs"
+    ssl_args="-config-file=/consul/config/tls.json"
+  fi
+  
   # Create startup script for Consul
   log "Creating startup script for Consul..."
   
@@ -213,12 +223,14 @@ sudo docker run -d --name consul \\
   --restart always \\
   --network host \\
   -v ${DATA_DIR}/consul_data:/consul/data \\
+  ${ssl_volumes} \\
   hashicorp/consul:${CONSUL_VERSION} \\
   agent -server -bootstrap \\
   -bind=${CONSUL_BIND_ADDR} \\
   -advertise=${CONSUL_ADVERTISE_ADDR} \\
   -client=0.0.0.0 \\
-  -ui
+  -ui \\
+  ${ssl_args}
 EOF
   
   chmod +x ${PARENT_DIR}/bin/start-consul.sh
@@ -262,6 +274,7 @@ EOF
 # To view logs: sudo docker logs consul
 # Container name: consul
 # IP address: ${CONSUL_BIND_ADDR}
+# SSL enabled: ${CONSUL_ENABLE_SSL:-false}
 EOF
 
   success "Consul deployment completed"

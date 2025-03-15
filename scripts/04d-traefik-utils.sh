@@ -19,13 +19,20 @@ deploy_traefik() {
   # Deploy the job
   log "Submitting Traefik job to Nomad..."
   
+  # Prepare the command with SSL parameters if needed
+  NOMAD_CMD="nomad"
+  if [[ "${NOMAD_ADDR}" == https://* ]]; then
+    log "Using SSL connection for Nomad deployment"
+    # SSL variables should be already exported by setup_nomad_auth
+  fi
+  
   # First, purge any existing job to ensure clean state
   if [ -n "${NOMAD_TOKEN}" ]; then
-    log "Stopping any existing Traefik job..."
-    NOMAD_TOKEN="${NOMAD_TOKEN}" nomad job stop -purge traefik 2>/dev/null || true
+    log "Stopping any existing Traefik job with token..."
+    ${NOMAD_CMD} job stop -purge traefik 2>/dev/null || true
   else
-    log "Stopping any existing Traefik job..."
-    nomad job stop -purge traefik 2>/dev/null || true
+    log "Stopping any existing Traefik job without token..."
+    ${NOMAD_CMD} job stop -purge traefik 2>/dev/null || true
   fi
   
   # Wait a moment for the job to be purged
@@ -35,19 +42,21 @@ deploy_traefik() {
   local job_file="${JOB_DIR}/traefik.hcl"
   local deploy_result=0
   
+  log "Deploying job with command: ${NOMAD_CMD} job run ${job_file}"
+  
   if [ -n "${NOMAD_TOKEN}" ]; then
-    log "Running job with authentication token..."
-    NOMAD_TOKEN="${NOMAD_TOKEN}" nomad job run "${job_file}" || deploy_result=$?
+    # Token is already exported
+    ${NOMAD_CMD} job run "${job_file}" || deploy_result=$?
   else
-    log "Running job without authentication token..."
-    nomad job run "${job_file}" || deploy_result=$?
+    # No token
+    ${NOMAD_CMD} job run "${job_file}" || deploy_result=$?
   fi
   
   if [ ${deploy_result} -ne 0 ]; then
     warn "Failed to deploy Traefik job to Nomad (exit code: ${deploy_result})"
     
     # Check for "missing drivers" error
-    if nomad job status traefik 2>&1 | grep -q "missing drivers"; then
+    if ${NOMAD_CMD} job status traefik 2>&1 | grep -q "missing drivers"; then
       warn "Detected 'missing drivers' error. The Docker driver is not available to Nomad."
       warn "Please ensure that:"
       warn "1. The nomad user is in the docker group: sudo synogroup --member docker nomad"
@@ -80,11 +89,7 @@ deploy_traefik() {
   
   # Check if Traefik job is running
   local job_status=""
-  if [ -n "${NOMAD_TOKEN}" ]; then
-    job_status=$(NOMAD_TOKEN="${NOMAD_TOKEN}" nomad job status traefik | grep -A 1 "Status" | tail -n 1)
-  else
-    job_status=$(nomad job status traefik | grep -A 1 "Status" | tail -n 1)
-  fi
+  job_status=$(${NOMAD_CMD} job status traefik | grep -A 1 "Status" | tail -n 1)
   
   if [[ "${job_status}" == *"running"* ]]; then
     success "Traefik job is running successfully in Nomad"
@@ -116,13 +121,11 @@ deploy_traefik() {
       
       # Check Docker container logs
       log "Checking Traefik container logs..."
-      if [ -n "${NOMAD_TOKEN}" ]; then
-        local ALLOC_ID=$(NOMAD_TOKEN="${NOMAD_TOKEN}" nomad job allocs -latest traefik | grep -v ID | head -1 | awk '{print $1}')
-        if [ -n "${ALLOC_ID}" ]; then
-          log "Latest allocation: ${ALLOC_ID}"
-          log "Traefik logs:"
-          NOMAD_TOKEN="${NOMAD_TOKEN}" nomad alloc logs "${ALLOC_ID}" traefik || warn "Failed to retrieve logs"
-        fi
+      local ALLOC_ID=$(${NOMAD_CMD} job allocs -latest traefik | grep -v ID | head -1 | awk '{print $1}')
+      if [ -n "${ALLOC_ID}" ]; then
+        log "Latest allocation: ${ALLOC_ID}"
+        log "Traefik logs:"
+        ${NOMAD_CMD} alloc logs "${ALLOC_ID}" traefik || warn "Failed to retrieve logs"
       fi
     fi
     

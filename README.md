@@ -7,6 +7,8 @@ A comprehensive self-hosted DevOps platform designed specifically for Synology D
 
 This project provides a modular, script-based approach to setting up a complete DevOps environment using HashiCorp Nomad as the orchestration layer. The platform includes service discovery, reverse proxy with TLS, secrets management, monitoring, logging, container registry, and centralized authentication.
 
+The platform uses Nomad with SSL enabled for secure communication and implements an optimized approach for persistent storage using Docker's mount directive, ensuring compatibility with Synology's Nomad implementation.
+
 ## System Architecture
 
 ```mermaid
@@ -73,7 +75,7 @@ flowchart TB
 ### Core Components
 
 - **Hardware**: Synology DS923+ with 32GB RAM and 4x4TB HDDs in RAID10
-- **Orchestration**: HashiCorp Nomad
+- **Orchestration**: HashiCorp Nomad with SSL enabled
 - **Service Discovery**: Consul
 - **Reverse Proxy**: Traefik with self-signed certificates
 - **Secrets Management**: HashiCorp Vault
@@ -96,7 +98,7 @@ Before proceeding, ensure you have completed all Stage 0 prerequisites:
 - 32GB RAM installed and recognized by the system
 - 4x4TB HDDs configured in RAID10
 - Container Manager package installed
-- Nomad installed and running
+- Nomad installed, configured with SSL, and running
 - SSH enabled with key-based authentication
 - Proper firewall configuration
 - Directory structure created in /volume1/nomad/
@@ -166,6 +168,7 @@ This platform is specifically designed for Synology DS923+ with the following ad
 - Memory optimizations for 32GB RAM
 - Consul DNS integration with Synology
 - Local network security configuration
+- Optimized volume handling using Docker mount directives
 
 For detailed Synology-specific considerations, see [Synology Considerations](docs/synology-considerations.md).
 
@@ -193,6 +196,7 @@ For details, see [Storage Configuration](docs/storage-configuration.md).
 The platform implements several security measures:
 
 - Self-signed certificates with local CA
+- SSL-enabled Nomad for secure communication
 - SSH restricted to local network
 - Firewall rules for service access
 - OIDC authentication for services
@@ -210,12 +214,28 @@ Common issues and their solutions are documented in the [Troubleshooting Guide](
 
 ### Volume Configuration
 
-This platform has been specifically adapted for Synology NAS systems. Due to limitations in the Synology implementation of Nomad, persistent storage is handled differently than in standard Nomad deployments:
+This platform has been specifically adapted for Synology NAS systems. For persistent storage, the platform uses Docker's mount directive in Nomad job configurations:
 
-- The Synology version of Nomad does not support the `host` volume type used with `nomad volume create`
-- Instead, persistent storage is achieved using Docker volume mounts in job definitions
-- All necessary directories are still created during setup for easy mounting
-- Job definitions use the syntax: `volumes = ["/volume1/docker/nomad/volumes/service_data:/container/path"]`
+```hcl
+job "service" {
+  group "service-group" {
+    task "service-task" {
+      driver = "docker"
+      
+      config {
+        image = "service-image:latest"
+        
+        mount {
+          type = "bind"
+          source = "/volume1/docker/nomad/volumes/service_data"
+          target = "/container/path"
+          readonly = false
+        }
+      }
+    }
+  }
+}
+```
 
 This approach ensures data persistence while working within Synology's constraints. See the [Volume Configuration](docs/02-volume-configuration.md) and [Storage Configuration](docs/storage-configuration.md) documents for detailed information.
 

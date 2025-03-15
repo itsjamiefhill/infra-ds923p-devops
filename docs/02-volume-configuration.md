@@ -1,28 +1,66 @@
 # Volume Configuration for Synology DS923+
 
-This document provides detailed information about the Nomad volume configuration for the HomeLab DevOps Platform on Synology DS923+.
+This document provides detailed information about the volume configuration for the HomeLab DevOps Platform on Synology DS923+.
 
 ## Overview
 
-Nomad volumes are used to provide persistent storage for the platform's containerized services. The `02-configure-volumes.sh` script is responsible for creating and registering these volumes with Nomad.
+Persistent storage is essential for containerized services in the platform. The `02-configure-volumes.sh` script creates the necessary directory structure and provides templates for using mount directives in Nomad job configurations.
 
-## Nomad Volumes Concept
+## Volume Configuration Approaches
 
-In Nomad, volumes allow tasks to use persistent storage that exists beyond the lifecycle of a single allocation. This is crucial for services that need to maintain state, such as service discovery, logging, and monitoring.
+There are two main approaches for configuring persistent storage with Nomad on Synology:
 
-The HomeLab DevOps Platform uses directories on the Synology filesystem mapped to container paths. This ensures that data is persisted even when containers are restarted or relocated.
+1. **Using the `mount` directive** (Recommended)
+2. **Using Docker volume mounts** (Alternative)
 
-## Synology-Specific Volume Considerations
+The platform automatically determines which approach to use based on your Nomad installation capabilities.
 
-When using Nomad on Synology DS923+, there are specific considerations regarding volume handling:
+## Mount Directive Approach
 
-### Host Volume Type Limitations
+The recommended approach for Synology Nomad installations is to use the `mount` directive in your job configurations:
 
-The Synology version of Nomad does not support the `host` volume type directly through the `nomad volume create` command. Instead, volumes should be managed through Docker volume mounts in the job definitions.
+```hcl
+job "consul" {
+  // ...
+  group "consul" {
+    task "consul" {
+      driver = "docker"
+      
+      config {
+        image = "hashicorp/consul:latest"
+        
+        mount {
+          type = "bind"
+          source = "/volume1/docker/nomad/volumes/consul_data"
+          target = "/consul/data"
+          readonly = false
+        }
+      }
+    }
+  }
+}
+```
 
-#### Alternative Volume Approach
+This approach:
+- Uses Nomad's native configuration syntax
+- Provides clearer semantics in job definitions
+- Follows Nomad best practices
+- Is compatible with Synology's Nomad implementation
 
-Rather than using Nomad's volume plugin system, use the Docker volume mount syntax in your job definitions:
+### Mount Directive Options
+
+The `mount` directive supports several options:
+
+| Option | Description | Example |
+|--------|-------------|---------|
+| `type` | The mount type (usually "bind") | `type = "bind"` |
+| `source` | The path on the host system | `source = "/volume1/docker/nomad/volumes/consul_data"` |
+| `target` | The path inside the container | `target = "/consul/data"` |
+| `readonly` | Whether the mount is read-only | `readonly = false` |
+
+## Docker Volume Mount Approach (Alternative)
+
+If you encounter issues with the `mount` directive, you can also use Docker's volume syntax:
 
 ```hcl
 job "consul" {
@@ -40,7 +78,7 @@ job "consul" {
 }
 ```
 
-This approach achieves the same goal of persistent storage while working within Synology Nomad's limitations.
+This approach still works but is considered Docker-specific rather than using Nomad's native configuration.
 
 ## Storage Classes
 
@@ -71,7 +109,7 @@ The platform configures the following volumes:
 
 ## Volume Directory Structure
 
-While the Synology Nomad doesn't support volume registration, the script still creates the proper directory structure to be used with Docker volume mounts:
+The script creates the following directory structure to be used with mount directives:
 
 ```
 /volume1/docker/nomad/volumes/
@@ -94,38 +132,65 @@ While the Synology Nomad doesn't support volume registration, the script still c
 
 The `02-configure-volumes.sh` script:
 
-1. Creates the directories for all storage classes and service volumes
-2. Detects that Synology Nomad doesn't support host volumes
-3. Creates a VOLUME_README.md file with instructions for using Docker volume mounts
-4. Ensures all directories have proper permissions
+1. Checks if your Nomad installation supports host volumes
+2. If host volumes are supported, creates traditional Nomad volume definitions
+3. For Synology systems, creates job templates that use the `mount` directive
+4. Generates a comprehensive VOLUME_README.md with usage instructions
+5. Creates example templates for all major services
 
-## Volume Usage in Jobs
+## Volume Templates
 
-For Synology Nomad installations, volumes are used with the following syntax:
+The script generates volume templates for all major services in `config/volume_templates/`:
+
+- consul.hcl
+- vault.hcl
+- traefik.hcl
+- prometheus.hcl
+- grafana.hcl
+- registry.hcl
+- loki.hcl
+- keycloak.hcl
+- homepage.hcl
+
+These templates show the proper way to implement the mount directive for each service.
+
+## Using Volume Templates
+
+To use the templates in your job definitions:
+
+1. Refer to the templates in `config/volume_templates/`
+2. Copy the mount directive block to your job definition
+3. Adjust paths and options as needed
+
+For example:
 
 ```hcl
-job "vault" {
-  // Job configuration...
-
-  group "vault" {
-    task "vault" {
-      // Task configuration...
-
-      config {
-        image = "vault:1.9.0"
-        
-        volumes = [
-          "/volume1/docker/nomad/volumes/vault_data:/vault/data"
-        ]
-      }
+job "prometheus" {
+  group "prometheus" {
+    task "prometheus" {
+      driver = "docker"
       
-      // Rest of the task definition...
+      config {
+        image = "prom/prometheus:latest"
+        
+        mount {
+          type = "bind"
+          source = "/volume1/docker/nomad/volumes/prometheus_data"
+          target = "/prometheus"
+          readonly = false
+        }
+        
+        mount {
+          type = "bind"
+          source = "/volume1/docker/nomad/config/prometheus/prometheus.yml"
+          target = "/etc/prometheus/prometheus.yml"
+          readonly = true
+        }
+      }
     }
   }
 }
 ```
-
-This directly maps the host directory to the container path without requiring Nomad volume registration.
 
 ## Volume Persistence on Synology
 
@@ -161,7 +226,7 @@ You can customize volume locations by modifying the `DATA_DIR` variable in `cust
 If you need to customize individual volume locations, you'll need to modify both:
 
 1. The directory creation paths in `01-setup-directories.sh`
-2. The corresponding volume mount paths in your job definitions
+2. The corresponding mount source paths in your job definitions
 
 ## Performance Considerations on Synology
 
@@ -175,20 +240,47 @@ For optimal performance on your Synology DS923+:
 
 ## Docker Images on Synology
 
-It's important to note that Docker images and container runtime data are stored in Synology's Container Manager location (`/var/packages/ContainerManager/var/docker`), not in your Nomad volumes. This location cannot be easily changed without breaking Container Manager.
+It's important to note that Docker images and container runtime data are stored in Synology's Container Manager location (`/var/packages/ContainerManager/var/docker`), not in your volume mounts. This location cannot be easily changed without breaking Container Manager.
 
-Your Nomad volumes are only for the persistent data generated and used by the services, not for the container images themselves.
+Your mounted directories are only for the persistent data generated and used by the services, not for the container images themselves.
+
+## Multiple Mount Points
+
+Some services may require multiple mount points. For example, Traefik needs access to both certificates and configuration:
+
+```hcl
+config {
+  image = "traefik:latest"
+  
+  mount {
+    type = "bind"
+    source = "/volume1/docker/nomad/volumes/certificates"
+    target = "/certs"
+    readonly = true
+  }
+  
+  mount {
+    type = "bind"
+    source = "/volume1/docker/nomad/config/traefik"
+    target = "/etc/traefik"
+    readonly = true
+  }
+}
+```
+
+You can define as many mount directives as needed for a service.
 
 ## Troubleshooting Volume Issues
 
 Common volume-related issues and solutions:
 
-1. **"Error unknown volume type" When Creating Volumes**:
-   - **Cause**: The Synology version of Nomad does not support the host volume plugin.
-   - **Solution**: Use Docker volume mounts directly in your job definitions rather than trying to register volumes with Nomad.
+1. **Mount Directive Not Working**:
+   - **Solution**: Try the alternative `volumes = []` syntax
+   - Verify Docker driver is being used
+   - Check for typos in paths
 
 2. **Data Not Persisting**:
-   - Verify the volume mount path in the job definition is correct
+   - Verify the mount path in the job definition is correct
    - Check that the host directory exists with proper permissions
    - Ensure the container is writing to the mounted path
 
@@ -200,7 +292,7 @@ Common volume-related issues and solutions:
 4. **Cannot Access Volume Data**:
    - Check if the directory exists: `ls -la $DATA_DIR/<volume-name>`
    - Verify the path in your job definition
-   - Check for typos in the volume mount path
+   - Check for typos in the mount source or target paths
 
 ## Next Steps
 

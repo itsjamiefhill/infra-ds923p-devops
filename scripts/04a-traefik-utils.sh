@@ -74,6 +74,25 @@ setup_nomad_auth() {
     log "Nomad token set in environment"
   fi
   
+  # Setup SSL environment if not already set
+  if [ -z "${NOMAD_ADDR}" ]; then
+    # Default to https if SSL certs exist
+    if [ -f "/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem" ]; then
+      export NOMAD_ADDR="https://127.0.0.1:4646"
+      export NOMAD_CACERT="/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem"
+      export NOMAD_CLIENT_CERT="/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem"
+      export NOMAD_CLIENT_KEY="/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem"
+      log "SSL environment configured for Nomad:"
+      log "NOMAD_ADDR=${NOMAD_ADDR}"
+      log "NOMAD_CACERT=${NOMAD_CACERT}"
+    else
+      export NOMAD_ADDR="http://127.0.0.1:4646"
+      log "SSL certificates not found, using non-SSL connection: ${NOMAD_ADDR}"
+    fi
+  else
+    log "Using existing NOMAD_ADDR: ${NOMAD_ADDR}"
+  fi
+  
   # Test if we can authenticate with Nomad
   if ! nomad status 2>/dev/null; then
     warn "Could not authenticate with Nomad using the provided token."
@@ -201,18 +220,24 @@ check_docker_permissions() {
 check_nomad_connectivity() {
   log "Checking Nomad connectivity..."
   
-  # Set up Nomad environment
-  if [ -n "${NOMAD_ADDR}" ]; then
-    log "Using configured NOMAD_ADDR: ${NOMAD_ADDR}"
-    export NOMAD_ADDR="${NOMAD_ADDR}"
-  else
-    # Try to guess a reasonable default
-    export NOMAD_ADDR="http://127.0.0.1:4646"
-    log "NOMAD_ADDR not set, using default: ${NOMAD_ADDR}"
+  # NOMAD_ADDR should be already set by setup_nomad_auth
+  log "Using NOMAD_ADDR: ${NOMAD_ADDR}"
+  
+  # Prepare curl command with SSL options if needed
+  CURL_OPTS=""
+  if [[ "${NOMAD_ADDR}" == https://* ]] && [ -n "${NOMAD_CACERT}" ]; then
+    CURL_OPTS="--cacert ${NOMAD_CACERT}"
+    
+    # Add client certificate if available
+    if [ -n "${NOMAD_CLIENT_CERT}" ] && [ -n "${NOMAD_CLIENT_KEY}" ]; then
+      CURL_OPTS="${CURL_OPTS} --cert ${NOMAD_CLIENT_CERT} --key ${NOMAD_CLIENT_KEY}"
+    fi
+    
+    log "Using SSL for Nomad API connection"
   fi
   
   # Direct API check (doesn't require authentication for basic status)
-  if curl -s -f "${NOMAD_ADDR}/v1/status/leader" &>/dev/null; then
+  if curl -s -f ${CURL_OPTS} "${NOMAD_ADDR}/v1/status/leader" &>/dev/null; then
     log "Nomad API is reachable at ${NOMAD_ADDR}"
   else
     warn "Cannot connect to Nomad API at ${NOMAD_ADDR}"
@@ -222,7 +247,7 @@ check_nomad_connectivity() {
   
   # Try authenticated operations (will need the token)
   if [ -n "${NOMAD_TOKEN}" ]; then
-    if curl -s -f -H "X-Nomad-Token: ${NOMAD_TOKEN}" "${NOMAD_ADDR}/v1/jobs" &>/dev/null; then
+    if curl -s -f ${CURL_OPTS} -H "X-Nomad-Token: ${NOMAD_TOKEN}" "${NOMAD_ADDR}/v1/jobs" &>/dev/null; then
       log "Successfully authenticated with Nomad API"
       return 0
     else

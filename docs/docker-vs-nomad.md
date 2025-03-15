@@ -62,9 +62,13 @@ job "service-name" {
       config {
         image = "service-image:latest"
         ports = ["http"]
-        volumes = [
-          "/volume1/docker/nomad/volumes/service_data:/container/path"
-        ]
+        
+        mount {
+          type = "bind"
+          source = "/volume1/docker/nomad/volumes/service_data"
+          target = "/container/path"
+          readonly = false
+        }
       }
 
       resources {
@@ -85,12 +89,13 @@ job "service-name" {
 - **Rolling Updates**: Zero-downtime deployments possible
 - **API Integration**: Programmatic control and monitoring
 - **Web UI**: Visual management and status monitoring
+- **SSL Support**: Secure communication between components
 
 ### Limitations of Nomad on Synology
 
 Synology's implementation of Nomad has several important limitations:
 
-1. **Missing Volume Types**: The Synology version of Nomad does not support the standard `host` volume type used in Nomad volume registrations
+1. **Mount Configuration**: The Synology version of Nomad requires using either the `mount` directive or Docker-specific `volumes` configuration rather than Nomad's volume registration system
 2. **Network Mode Restrictions**: Some network modes (like host networking) may not work properly through Nomad on Synology
 3. **Permission Handling**: Container-to-host permission mapping can be problematic
 4. **Multiple Network Interfaces**: Nomad may not correctly handle binding on systems with multiple network interfaces
@@ -191,7 +196,7 @@ sudo docker run -d --name service-name \
 
 ### Consul Deployment Comparison
 
-#### Nomad Job (May Be Problematic on Synology):
+#### Nomad Job (Using Mount Directive):
 
 ```hcl
 job "consul" {
@@ -212,9 +217,13 @@ job "consul" {
       config {
         image = "hashicorp/consul:1.15.4"
         ports = ["http", "dns"]
-        volumes = [
-          "/volume1/docker/nomad/volumes/consul_data:/consul/data"
-        ]
+        
+        mount {
+          type = "bind"
+          source = "/volume1/docker/nomad/volumes/consul_data"
+          target = "/consul/data"
+          readonly = false
+        }
         
         command = "agent"
         args = [
@@ -267,7 +276,7 @@ sudo docker run -d --name consul \
 
 ### Prometheus Deployment Example
 
-#### Nomad Job (Recommended Approach):
+#### Nomad Job (Using Mount Directive):
 
 ```hcl
 job "prometheus" {
@@ -287,10 +296,20 @@ job "prometheus" {
       config {
         image = "prom/prometheus:latest"
         ports = ["http"]
-        volumes = [
-          "/volume1/docker/nomad/volumes/prometheus_data:/prometheus",
-          "/volume1/docker/nomad/config/prometheus.yml:/etc/prometheus/prometheus.yml"
-        ]
+        
+        mount {
+          type = "bind"
+          source = "/volume1/docker/nomad/volumes/prometheus_data"
+          target = "/prometheus"
+          readonly = false
+        }
+        
+        mount {
+          type = "bind"
+          source = "/volume1/docker/nomad/config/prometheus.yml"
+          target = "/etc/prometheus/prometheus.yml"
+          readonly = true
+        }
       }
 
       resources {
@@ -415,6 +434,11 @@ To migrate in the opposite direction:
    - Configure appropriate update stanzas for zero-downtime deployments
    - Test update procedures before applying to production
 
+5. **SSL Configuration**:
+   - Ensure scripts set the proper environment variables for SSL
+   - Include Nomad token configuration for authenticated API calls
+   - Test job deployments with SSL to verify proper operation
+
 ## Troubleshooting
 
 ### Common Direct Docker Issues
@@ -471,17 +495,145 @@ To migrate in the opposite direction:
    }
    ```
 
-3. **Volume Issues**:
+3. **Mount Issues**:
    ```bash
-   # For "Error unknown volume type" message
-   # Use direct volume mounts instead of Nomad volumes
+   # If mount directive doesn't work
+   # Try the alternative volumes approach
    volumes = [
      "/host/path:/container/path"
    ]
    ```
 
-4. **Network Mode Issues**:
+4. **SSL Certificate Issues**:
+   ```bash
+   # Verify environment variables are set
+   echo $NOMAD_ADDR
+   echo $NOMAD_CACERT
+   
+   # Check certificate paths
+   ls -la $NOMAD_CACERT $NOMAD_CLIENT_CERT $NOMAD_CLIENT_KEY
+   
+   # Test SSL connectivity
+   curl --cacert $NOMAD_CACERT --cert $NOMAD_CLIENT_CERT --key $NOMAD_CLIENT_KEY https://127.0.0.1:4646/v1/agent/members
+   ```
+
+5. **Authentication Issues**:
+   ```bash
+   # Make sure NOMAD_TOKEN is set
+   echo $NOMAD_TOKEN
+   
+   # Test token validity
+   curl -H "X-Nomad-Token: $NOMAD_TOKEN" --cacert $NOMAD_CACERT https://127.0.0.1:4646/v1/jobs
+   ```
+Here's the continuation of the updated `docs/docker-vs-nomad.md` file:
+
+6. **Network Mode Issues**:
    ```bash
    # If host network mode doesn't work in Nomad
    # Consider switching to direct Docker deployment
    ```
+
+7. **Job Definition Errors**:
+   ```bash
+   # Validate the job file
+   nomad job validate job-file.hcl
+   
+   # Run with verbose output
+   nomad job run -verbose job-file.hcl
+   ```
+
+8. **Mount vs Volumes Confusion**:
+   ```bash
+   # If you're unsure which approach to use, try the mount directive first
+   mount {
+     type = "bind"
+     source = "/volume1/docker/nomad/volumes/service_data"
+     target = "/container/path"
+     readonly = false
+   }
+   
+   # If that fails, fall back to volumes syntax
+   volumes = [
+     "/volume1/docker/nomad/volumes/service_data:/container/path"
+   ]
+   ```
+
+## SSL Configuration for Nomad
+
+When interacting with Nomad in scripts or from the command line, you'll need proper SSL configuration:
+
+### Environment Variables for SSL
+
+```bash
+# Add these to your .bashrc or script
+export NOMAD_ADDR=https://127.0.0.1:4646
+export NOMAD_CACERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem
+export NOMAD_CLIENT_CERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem
+export NOMAD_CLIENT_KEY=/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem
+```
+
+### Authentication Token
+
+```bash
+# Store the token securely
+echo 'NOMAD_TOKEN="your-management-token"' > /volume1/docker/nomad/config/nomad_auth.conf
+chmod 600 /volume1/docker/nomad/config/nomad_auth.conf
+
+# Load the token in scripts
+if [ -f "/volume1/docker/nomad/config/nomad_auth.conf" ]; then
+  source "/volume1/docker/nomad/config/nomad_auth.conf"
+  export NOMAD_TOKEN
+fi
+```
+
+### Nomad API Interaction with SSL
+
+```bash
+# When making API calls to Nomad, include both SSL and token
+curl -H "X-Nomad-Token: $NOMAD_TOKEN" \
+     --cacert $NOMAD_CACERT \
+     --cert $NOMAD_CLIENT_CERT \
+     --key $NOMAD_CLIENT_KEY \
+     https://127.0.0.1:4646/v1/jobs
+```
+
+## Choosing the Right Approach for Synology
+
+When deciding between Nomad and direct Docker deployment, consider:
+
+### Use Nomad When:
+- You want centralized management of most services
+- You need sophisticated orchestration features
+- The service doesn't have complex networking requirements
+- You're comfortable with HCL syntax and Nomad's abstractions
+- You want to leverage the Nomad UI for monitoring and management
+
+### Use Direct Docker When:
+- The service is part of core infrastructure (like Consul)
+- You've experienced persistent issues using Nomad
+- The service requires host networking or specialized Docker features
+- You need more direct control over container execution
+- Troubleshooting becomes easier with direct Docker commands
+
+### Hybrid Approach
+
+For many Synology deployments, a hybrid approach works best:
+
+1. **Use Direct Docker** for core infrastructure:
+   - Consul service discovery
+   - DNS services
+   - Network-critical components
+
+2. **Use Nomad** for most application services:
+   - Web applications and dashboards
+   - Databases and storage services
+   - Monitoring and logging components
+   - Registry and other supporting services
+
+This approach combines the reliability of direct Docker for foundational services with the management benefits of Nomad for the majority of your applications.
+
+## Conclusion
+
+Both Nomad and direct Docker deployment have their place in a Synology-based HomeLab DevOps platform. Understanding the strengths and limitations of each approach will help you make the best choice for each component of your infrastructure.
+
+Remember that many issues with Nomad on Synology can be addressed by using the `mount` directive in job definitions rather than traditional Nomad volumes. When combined with proper SSL configuration, this approach provides a robust and secure orchestration layer for your containerized services.

@@ -143,6 +143,28 @@ run_module() {
   fi
 }
 
+setup_nomad_ssl() {
+  log "Setting up Nomad SSL environment..."
+  
+  # Set up environment variables for Nomad SSL
+  export NOMAD_ADDR=https://127.0.0.1:4646
+  export NOMAD_CACERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem
+  export NOMAD_CLIENT_CERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem
+  export NOMAD_CLIENT_KEY=/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem
+  
+  # If NOMAD_TOKEN is set in config, use it
+  if [ -f "${CONFIG_DIR}/nomad_auth.conf" ]; then
+    source "${CONFIG_DIR}/nomad_auth.conf"
+  fi
+  
+  # Check if certificate files exist
+  if [ ! -f "$NOMAD_CACERT" ] || [ ! -f "$NOMAD_CLIENT_CERT" ] || [ ! -f "$NOMAD_CLIENT_KEY" ]; then
+    warn "Nomad SSL certificates not found at expected paths. SSL connections may fail."
+  else
+    success "Nomad SSL environment configured"
+  fi
+}
+
 # Main installation process
 main() {
   echo_log "Starting HomeLab DevOps Platform installation (parts 01-04)..."
@@ -150,6 +172,9 @@ main() {
   # Setup script environment (creates log directory and loads config)
   setup_script_environment
   
+  # Set up SSL to secure nomad access
+  setup_nomad_ssl
+
   # Check prerequisites
   check_prerequisites
   

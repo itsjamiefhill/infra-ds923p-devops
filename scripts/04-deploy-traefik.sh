@@ -56,6 +56,18 @@ if [ -f "${PARENT_DIR}/config/custom.conf" ]; then
     source "${PARENT_DIR}/config/custom.conf"
 fi
 
+# Set up Nomad SSL environment if certificates exist
+if [ -f "/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem" ]; then
+    export NOMAD_ADDR="${NOMAD_ADDR:-https://127.0.0.1:4646}"
+    export NOMAD_CACERT="/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem"
+    export NOMAD_CLIENT_CERT="/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem"
+    export NOMAD_CLIENT_KEY="/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem"
+    log "Nomad SSL environment configured"
+else
+    export NOMAD_ADDR="${NOMAD_ADDR:-http://127.0.0.1:4646}"
+    log "Nomad SSL certificates not found, using non-SSL connection"
+fi
+
 # Set up logging
 LOGS_DIR=${LOG_DIR:-"${PARENT_DIR}/logs"}
 LOG_FILE="${LOGS_DIR}/traefik_deploy.log"
@@ -76,6 +88,12 @@ log "TRAEFIK_ADMIN_PORT=${TRAEFIK_ADMIN_PORT}"
 log "WILDCARD_CERT_PATH=${WILDCARD_CERT_PATH}"
 log "WILDCARD_KEY_PATH=${WILDCARD_KEY_PATH}"
 log "NOMAD_ADDR=${NOMAD_ADDR}"
+
+if [[ "${NOMAD_ADDR}" == https://* ]]; then
+    log "NOMAD_CACERT=${NOMAD_CACERT}"
+    log "NOMAD_CLIENT_CERT=${NOMAD_CLIENT_CERT}"
+    log "NOMAD_CLIENT_KEY=${NOMAD_CLIENT_KEY}"
+fi
 
 # Main function
 main() {

@@ -7,7 +7,7 @@ This document outlines specific considerations, limitations, and best practices 
 1. [Hardware Specifications](#hardware-specifications)
 2. [DSM Limitations](#dsm-limitations)
 3. [Container Manager Considerations](#container-manager-considerations)
-4. [Nomad Volume Limitations on Synology](#nomad-volume-limitations-on-synology)
+4. [Nomad Volume Configuration on Synology](#nomad-volume-configuration-on-synology)
 5. [Storage Considerations](#storage-considerations)
 6. [Network Configuration](#network-configuration)
 7. [Memory Management](#memory-management)
@@ -15,6 +15,7 @@ This document outlines specific considerations, limitations, and best practices 
 9. [DSM Updates and Maintenance](#dsm-updates-and-maintenance)
 10. [Performance Optimization](#performance-optimization)
 11. [Security Considerations](#security-considerations)
+12. [Nomad SSL Configuration](#nomad-ssl-configuration)
 
 ## Hardware Specifications
 
@@ -81,55 +82,51 @@ When using the local Docker Registry:
 
 2. Restart the Container Manager package after certificate changes.
 
-## Nomad Volume Limitations on Synology
+## Nomad Volume Configuration on Synology
 
-The Synology implementation of Nomad has specific limitations that affect how persistent storage is configured for the HomeLab DevOps Platform.
+### Mount Directive Approach
 
-### Missing Host Volume Support
+The recommended approach for persistent storage on Synology is to use Nomad's `mount` directive in job definitions:
 
-While standard Nomad installations support the `host` volume type, the Synology version does not support this feature. Attempting to register volumes using `nomad volume create` will result in an "Error unknown volume type" message.
-
-### Alternative Volume Approach
-
-Due to this limitation, the platform uses Docker volume mounts instead of Nomad volumes:
-
-#### Standard Nomad (not supported on Synology):
 ```hcl
-volume "consul_data" {
-  type = "host"
-  config {
-    source = "/volume1/nomad/volumes/consul_data"
-  }
-}
-
-job "consul" {
-  group "consul" {
-    volume "consul_data" {
-      type = "host"
-      read_only = false
-      source = "consul_data"
-    }
-    
-    task "consul" {
-      volume_mount {
-        volume = "consul_data"
-        destination = "/consul/data"
-        read_only = false
+job "example" {
+  group "example" {
+    task "example" {
+      driver = "docker"
+      
+      config {
+        image = "example-image:latest"
+        
+        mount {
+          type = "bind"
+          source = "/volume1/docker/nomad/volumes/example_data"
+          target = "/data"
+          readonly = false
+        }
       }
     }
   }
 }
 ```
 
-#### Synology Nomad (supported approach):
+This approach:
+- Uses Nomad's native configuration syntax
+- Provides clearer semantics in job definitions
+- Follows Nomad best practices
+- Works reliably on Synology systems
+
+### Alternative Volume Approach
+
+If you encounter issues with the `mount` directive, you can also use Docker's volume mount syntax:
+
 ```hcl
-job "consul" {
-  group "consul" {
-    task "consul" {
+job "example" {
+  group "example" {
+    task "example" {
       config {
-        image = "consul:latest"
+        image = "example-image:latest"
         volumes = [
-          "/volume1/nomad/volumes/consul_data:/consul/data"
+          "/volume1/docker/nomad/volumes/example_data:/data"
         ]
       }
     }
@@ -137,17 +134,9 @@ job "consul" {
 }
 ```
 
-### Installation Script Adaptation
-
-The platform's installation scripts detect the Synology environment and adapt accordingly:
-
-1. The `01-setup-directories.sh` script still creates all necessary directories with appropriate permissions
-2. The `02-configure-volumes.sh` script identifies that Nomad doesn't support host volumes and creates a `VOLUME_README.md` file with instructions
-3. Job definitions use Docker's volume mount system instead of Nomad's volume system
-
 ### Volume Management Implications
 
-This alternative approach has several implications:
+These approaches have several implications:
 
 1. **Volume Management**: Volumes can't be managed through Nomad commands like `nomad volume list` or `nomad volume status`
 2. **Visibility**: There's no central place to view all volumes and their status in Nomad
@@ -156,14 +145,14 @@ This alternative approach has several implications:
 
 ### Best Practices for Synology Volume Management
 
-1. **Directory Structure**: Maintain a consistent directory structure in `/volume1/nomad/volumes/`
+1. **Directory Structure**: Maintain a consistent directory structure in `/volume1/docker/nomad/volumes/`
 2. **Permission Management**: Set appropriate ownership and permissions on host directories to match container users:
    ```bash
-   chown -R 472:472 /volume1/nomad/volumes/grafana_data  # Grafana runs as UID 472
-   chmod 777 /volume1/nomad/volumes/consul_data  # Consul needs full access
+   chown -R 472:472 /volume1/docker/nomad/volumes/grafana_data  # Grafana runs as UID 472
+   chmod 777 /volume1/docker/nomad/volumes/consul_data  # Consul needs full access
    ```
 3. **Documentation**: Keep a reference of volume mappings and required permissions
-4. **Backup Strategy**: Back up the entire `/volume1/nomad/volumes/` directory for comprehensive data protection
+4. **Backup Strategy**: Back up the entire `/volume1/docker/nomad/volumes/` directory for comprehensive data protection
 
 ### Container User IDs on Synology
 
@@ -478,6 +467,122 @@ Optimize disk I/O operations:
    - Enable jumbo frames (MTU 9000) if supported by your network
 
 2. If available, use the 10GbE upgrade for better performance
+
+## Nomad SSL Configuration
+
+### SSL Certificate Locations
+
+Nomad on Synology uses SSL certificates located at:
+```
+/var/packages/nomad/shares/nomad/etc/certs/
+```
+
+The key files are:
+- `nomad-ca.pem` - Root CA certificate
+- `nomad-cert.pem` - Server/client certificate
+- `nomad-key.pem` - Private key
+
+### Environment Variable Configuration
+
+To interact with the SSL-enabled Nomad API, you need to set these environment variables:
+
+```bash
+export NOMAD_ADDR=https://127.0.0.1:4646
+export NOMAD_CACERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem
+export NOMAD_CLIENT_CERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem
+export NOMAD_CLIENT_KEY=/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem
+```
+
+Add these to your `.bashrc` or create a source file:
+
+```bash
+cat > ~/nomad_ssl.env << EOF
+export NOMAD_ADDR=https://127.0.0.1:4646
+export NOMAD_CACERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem
+export NOMAD_CLIENT_CERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem
+export NOMAD_CLIENT_KEY=/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem
+EOF
+
+echo "source ~/nomad_ssl.env" >> ~/.bashrc
+```
+
+### Token Management
+
+Store your Nomad token securely:
+
+```bash
+# Create a secure config file for the token
+mkdir -p /volume1/docker/nomad/config
+echo 'NOMAD_TOKEN="your-management-token"' > /volume1/docker/nomad/config/nomad_auth.conf
+chmod 600 /volume1/docker/nomad/config/nomad_auth.conf
+```
+
+Source this file in scripts that need the token:
+
+```bash
+# In your script
+if [ -f "/volume1/docker/nomad/config/nomad_auth.conf" ]; then
+  source "/volume1/docker/nomad/config/nomad_auth.conf"
+  export NOMAD_TOKEN
+fi
+```
+
+### Script Adaptations for SSL
+
+Scripts that interact with Nomad need to be SSL-aware:
+
+```bash
+#!/bin/bash
+# Example script for Nomad interaction with SSL
+
+# Load SSL environment
+export NOMAD_ADDR=https://127.0.0.1:4646
+export NOMAD_CACERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem
+export NOMAD_CLIENT_CERT=/var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem
+export NOMAD_CLIENT_KEY=/var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem
+
+# Load token
+if [ -f "/volume1/docker/nomad/config/nomad_auth.conf" ]; then
+  source "/volume1/docker/nomad/config/nomad_auth.conf"
+  export NOMAD_TOKEN
+fi
+
+# Now run Nomad commands
+nomad job status
+```
+
+### SSL Troubleshooting
+
+If you encounter SSL-related issues:
+
+1. **Certificate Verification Errors**:
+   ```bash
+   # Test connection bypassing verification (for debugging only)
+   curl -k https://127.0.0.1:4646/v1/agent/members
+   
+   # With proper verification
+   curl --cacert $NOMAD_CACERT --cert $NOMAD_CLIENT_CERT --key $NOMAD_CLIENT_KEY https://127.0.0.1:4646/v1/agent/members
+   ```
+
+2. **Permission Issues**:
+   ```bash
+   # Check certificate permissions
+   ls -la /var/packages/nomad/shares/nomad/etc/certs/
+   
+   # Ensure you have read access to the certificates
+   sudo chmod 644 /var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem
+   sudo chmod 644 /var/packages/nomad/shares/nomad/etc/certs/nomad-cert.pem
+   sudo chmod 600 /var/packages/nomad/shares/nomad/etc/certs/nomad-key.pem
+   ```
+
+3. **Certificate Path Issues**:
+   ```bash
+   # Verify certificates exist
+   ls -la $NOMAD_CACERT $NOMAD_CLIENT_CERT $NOMAD_CLIENT_KEY
+   
+   # Create symbolic links if needed
+   sudo ln -sf /var/packages/nomad/shares/nomad/etc/certs/nomad-ca.pem /etc/ssl/certs/nomad-ca.pem
+   ```
 
 ## Security Considerations
 

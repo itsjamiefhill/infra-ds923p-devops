@@ -1,6 +1,6 @@
 #!/bin/bash
 # 02-configure-volumes.sh
-# Creates Nomad volume configurations according to documentation
+# Creates Nomad volume configurations with mount directive for Synology compatibility
 
 set -e
 
@@ -63,21 +63,19 @@ check_nomad_capabilities() {
     warn "Nomad server might not be running properly"
   fi
   
+  # Check if this is a Synology system
+  if [[ $(uname -a) == *"synology"* ]]; then
+    log "Detected Synology system, will use mount directive in job configurations"
+    return 1
+  fi
+  
   # Check volume capabilities
   log "Checking Nomad volume capabilities..."
   if nomad volume status &> /dev/null; then
     log "Nomad volume command is available"
   else
     warn "Nomad volume command might not be available or configured"
-  fi
-  
-  # Check if Synology has CSI plugins enabled
-  log "Checking for CSI plugins..."
-  if nomad plugin status &> /dev/null; then
-    PLUGINS=$(nomad plugin status)
-    log "Available plugins: $PLUGINS"
-  else
-    warn "Cannot get plugin status or no plugins available"
+    return 1
   fi
   
   # Check if the host volume type is supported
@@ -91,74 +89,324 @@ volume "test_volume" {
 }
 EOF
 
-  # Output the exact command we're going to run
-  log "Will run: nomad volume create $CONFIG_DIR/test_volume.hcl"
-  
-  # Try to get verbose output from nomad to understand the issue
-  VERBOSE_OUTPUT=$(nomad volume create -verbose $CONFIG_DIR/test_volume.hcl 2>&1)
-  log "Verbose output from volume creation:"
-  echo "$VERBOSE_OUTPUT"
-  
-  if echo "$VERBOSE_OUTPUT" | grep -q "unknown volume type"; then
+  # Try to register the test volume
+  if nomad volume create $CONFIG_DIR/test_volume.hcl &> /dev/null; then
+    log "Host volume type is supported"
+    # Clean up test volume
+    nomad volume delete test_volume &> /dev/null
+    return 0
+  else
     warn "Your Nomad installation does not support 'host' volume type"
-    log "Checking if this is a Synology Nomad installation..."
-    
-    # For Synology, we might need to use a different approach
-    if [[ $(uname -a) == *"synology"* ]]; then
-      log "Detected Synology system, will use an alternative approach"
-      return 1
-    fi
+    return 1
   fi
-  
-  return 0
 }
 
-# Generate Nomad job definitions with volume mounts instead
-generate_job_configurations() {
-  log "Your Nomad installation doesn't support host volumes directly"
-  log "Generating job configurations with volume mounts instead..."
+# Generate job templates with mount directive
+generate_mount_templates() {
+  log "Generating job templates with mount directive..."
   
-  # Create directories
-  mkdir -p $JOB_DIR
+  # Create directories for templates
+  mkdir -p $CONFIG_DIR/volume_templates
   
-  # Create a README explaining the alternative approach
+  # Create a README explaining the mount approach
   cat > $CONFIG_DIR/VOLUME_README.md << EOF
-# Volume Configuration Alternative
+# Volume Configuration for Synology Nomad
 
-This Nomad installation does not support the 'host' volume type directly.
-Instead, you'll need to use volume mounts in your job definitions.
+## Host Volume Support in Synology
 
-For each service, add the following to your job definition:
+While standard Nomad installations support the \`host\` volume type through \`nomad volume create\`,
+Synology's implementation works differently. Instead, use the Docker driver's \`mount\` configuration
+in your job specifications.
+
+## Recommended Approach
+
+Use the \`mount\` directive in your job definitions:
 
 \`\`\`hcl
-job "service-name" {
-  group "service-group" {
-    task "service-task" {
+job "example" {
+  group "example" {
+    task "example" {
+      driver = "docker"
+      
       config {
-        volumes = [
-          "/path/on/host:/path/in/container"
-        ]
+        image = "example-image:latest"
+        
+        mount {
+          type = "bind"
+          source = "${DATA_DIR}/example_data"
+          target = "/data"
+          readonly = false
+        }
       }
     }
   }
 }
 \`\`\`
 
-The directories have been created on the host system and can be used in your job definitions.
+This approach is preferred as it uses Nomad's native configuration syntax.
+
+## Alternative Approach
+
+If you encounter issues with the \`mount\` directive, you can also use the Docker-specific \`volumes\` syntax:
+
+\`\`\`hcl
+config {
+  image = "example-image:latest"
+  volumes = [
+    "${DATA_DIR}/example_data:/data"
+  ]
+}
+\`\`\`
+
+## Available Volume Directories
+
+The platform has created these directories for your use:
+
+| Directory | Purpose | Path |
+|-----------|---------|------|
+| High Performance | For services requiring fast I/O | ${DATA_DIR}/high_performance |
+| High Capacity | For services requiring large storage | ${DATA_DIR}/high_capacity |
+| Standard | For general purpose storage | ${DATA_DIR}/standard |
+| Service-specific | Pre-configured for platform services | ${DATA_DIR}/<service_name>_data |
 EOF
 
-  success "Created VOLUME_README.md with instructions for volume mounts"
-  
-  # Since we can't use volume plugin, we'll create an alternative method
-  log "Directories have been created in $DATA_DIR and can be used in job definitions"
-  log "Please refer to $CONFIG_DIR/VOLUME_README.md for guidance"
+  # Create Consul template
+  cat > $CONFIG_DIR/volume_templates/consul.hcl << EOF
+# Consul volume mount example
+job "consul" {
+  group "consul" {
+    task "consul" {
+      driver = "docker"
+      
+      config {
+        image = "hashicorp/consul:latest"
+        
+        mount {
+          type = "bind"
+          source = "${DATA_DIR}/consul_data"
+          target = "/consul/data"
+          readonly = false
+        }
+      }
+    }
+  }
+}
+EOF
+
+  # Create Vault template
+  cat > $CONFIG_DIR/volume_templates/vault.hcl << EOF
+# Vault volume mount example
+job "vault" {
+  group "vault" {
+    task "vault" {
+      driver = "docker"
+      
+      config {
+        image = "hashicorp/vault:latest"
+        
+        mount {
+          type = "bind"
+          source = "${DATA_DIR}/vault_data"
+          target = "/vault/data"
+          readonly = false
+        }
+      }
+    }
+  }
+}
+EOF
+
+  # Create Traefik template
+  cat > $CONFIG_DIR/volume_templates/traefik.hcl << EOF
+# Traefik volume mount example
+job "traefik" {
+  group "traefik" {
+    task "traefik" {
+      driver = "docker"
+      
+      config {
+        image = "traefik:latest"
+        
+        mount {
+          type = "bind"
+          source = "${DATA_DIR}/certificates"
+          target = "/certs"
+          readonly = false
+        }
+        
+        mount {
+          type = "bind"
+          source = "${CONFIG_DIR}/traefik"
+          target = "/etc/traefik"
+          readonly = true
+        }
+      }
+    }
+  }
+}
+EOF
+
+  # Create Prometheus template
+  cat > $CONFIG_DIR/volume_templates/prometheus.hcl << EOF
+# Prometheus volume mount example
+job "prometheus" {
+  group "prometheus" {
+    task "prometheus" {
+      driver = "docker"
+      
+      config {
+        image = "prom/prometheus:latest"
+        
+        mount {
+          type = "bind"
+          source = "${DATA_DIR}/prometheus_data"
+          target = "/prometheus"
+          readonly = false
+        }
+        
+        mount {
+          type = "bind"
+          source = "${CONFIG_DIR}/prometheus/prometheus.yml"
+          target = "/etc/prometheus/prometheus.yml"
+          readonly = true
+        }
+      }
+    }
+  }
+}
+EOF
+
+  # Create Grafana template
+  cat > $CONFIG_DIR/volume_templates/grafana.hcl << EOF
+# Grafana volume mount example
+job "grafana" {
+  group "grafana" {
+    task "grafana" {
+      driver = "docker"
+      
+      config {
+        image = "grafana/grafana:latest"
+        
+        mount {
+          type = "bind"
+          source = "${DATA_DIR}/grafana_data"
+          target = "/var/lib/grafana"
+          readonly = false
+        }
+      }
+    }
+  }
+}
+EOF
+
+  # Create Docker Registry template
+  cat > $CONFIG_DIR/volume_templates/registry.hcl << EOF
+# Docker Registry volume mount example
+job "registry" {
+  group "registry" {
+    task "registry" {
+      driver = "docker"
+      
+      config {
+        image = "registry:2"
+        
+        mount {
+          type = "bind"
+          source = "${DATA_DIR}/registry_data"
+          target = "/var/lib/registry"
+          readonly = false
+        }
+        
+        mount {
+          type = "bind"
+          source = "${DATA_DIR}/certificates"
+          target = "/certs"
+          readonly = true
+        }
+      }
+    }
+  }
+}
+EOF
+
+  # Create Loki template
+  cat > $CONFIG_DIR/volume_templates/loki.hcl << EOF
+# Loki volume mount example
+job "loki" {
+  group "loki" {
+    task "loki" {
+      driver = "docker"
+      
+      config {
+        image = "grafana/loki:latest"
+        
+        mount {
+          type = "bind"
+          source = "${DATA_DIR}/loki_data"
+          target = "/loki/data"
+          readonly = false
+        }
+      }
+    }
+  }
+}
+EOF
+
+  # Create Keycloak template
+  cat > $CONFIG_DIR/volume_templates/keycloak.hcl << EOF
+# Keycloak volume mount example
+job "keycloak" {
+  group "keycloak" {
+    task "keycloak" {
+      driver = "docker"
+      
+      config {
+        image = "quay.io/keycloak/keycloak:latest"
+        
+        mount {
+          type = "bind"
+          source = "${DATA_DIR}/keycloak_data"
+          target = "/opt/keycloak/data"
+          readonly = false
+        }
+      }
+    }
+  }
+}
+EOF
+
+  # Create Homepage template
+  cat > $CONFIG_DIR/volume_templates/homepage.hcl << EOF
+# Homepage volume mount example
+job "homepage" {
+  group "homepage" {
+    task "homepage" {
+      driver = "docker"
+      
+      config {
+        image = "ghcr.io/benphelps/homepage:latest"
+        
+        mount {
+          type = "bind"
+          source = "${DATA_DIR}/homepage_data"
+          target = "/app/config"
+          readonly = false
+        }
+      }
+    }
+  }
+}
+EOF
+
+  success "Job templates with mount directives created in $CONFIG_DIR/volume_templates"
+  log "Please refer to $CONFIG_DIR/VOLUME_README.md for guidance on using mount directives"
   
   return 0
 }
 
-# Create Nomad volume configurations according to documentation
-create_volumes() {
-  log "Creating Nomad volume configurations according to documentation..."
+# Create traditional Nomad volume configurations
+create_traditional_volumes() {
+  log "Creating traditional Nomad volume configurations..."
   
   # Create the volumes.hcl file
   cat > $CONFIG_DIR/volumes.hcl << EOF
@@ -256,31 +504,31 @@ volume "certificates" {
 }
 EOF
   
-  # Print the first few lines of the generated file for debugging
-  log "Verifying volumes.hcl file:"
-  head -n 10 $CONFIG_DIR/volumes.hcl
-  
-  # Check if Nomad supports host volumes
-  if check_nomad_capabilities; then
-    # Try to register all volumes
-    log "Registering all volumes with Nomad..."
-    if nomad volume create $CONFIG_DIR/volumes.hcl; then
-      success "All volumes created successfully"
-      return 0
-    else
-      warn "Failed to create volumes with Nomad"
-    fi
+  # Register all volumes
+  log "Registering all volumes with Nomad..."
+  if nomad volume create $CONFIG_DIR/volumes.hcl; then
+    success "All volumes created successfully using traditional method"
+    return 0
+  else
+    warn "Failed to create volumes with Nomad"
+    return 1
   fi
-  
-  # If we get here, we need to use the alternative approach
-  generate_job_configurations
 }
 
 # Main function
 main() {
-  log "Starting volume configuration according to documentation..."
-  create_volumes
-  success "Volume configuration completed (with alterations as needed)"
+  log "Starting volume configuration..."
+  
+  # Check if Nomad supports host volumes
+  if check_nomad_capabilities; then
+    log "Using traditional Nomad volume configuration approach"
+    create_traditional_volumes
+  else
+    log "Using mount directive approach for Synology compatibility"
+    generate_mount_templates
+  fi
+  
+  success "Volume configuration completed"
 }
 
 # Execute main function

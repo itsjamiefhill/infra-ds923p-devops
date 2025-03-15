@@ -40,6 +40,7 @@ fi
 # Clear previous configuration to avoid conflicts
 unset CONSUL_VERSION CONSUL_HTTP_PORT CONSUL_DNS_PORT CONSUL_CPU CONSUL_MEMORY CONSUL_HOST
 unset CONSUL_BIND_ADDR CONSUL_ADVERTISE_ADDR CONSUL_USE_DOCKER DNS_USE_HOSTS_FILE DNS_USE_DNSMASQ
+unset CONSUL_ENABLE_SSL
 
 # Source configuration files
 source "${PARENT_DIR}/config/default.conf"
@@ -69,6 +70,7 @@ CONSUL_ADVERTISE_ADDR=${CONSUL_ADVERTISE_ADDR:-""}
 DNS_USE_HOSTS_FILE=${DNS_USE_HOSTS_FILE:-true}
 DNS_USE_DNSMASQ=${DNS_USE_DNSMASQ:-false}
 DOMAIN=${DOMAIN:-"homelab.local"}
+CONSUL_ENABLE_SSL=${CONSUL_ENABLE_SSL:-false}
 
 # Print loaded configuration for debugging
 log "Loaded configuration:"
@@ -81,6 +83,7 @@ log "CONSUL_HTTP_PORT=${CONSUL_HTTP_PORT}"
 log "CONSUL_DNS_PORT=${CONSUL_DNS_PORT}"
 log "CONSUL_HOST=${CONSUL_HOST}"
 log "CONSUL_USE_DOCKER=${CONSUL_USE_DOCKER}"
+log "CONSUL_ENABLE_SSL=${CONSUL_ENABLE_SSL}"
 log "NOMAD_ADDR=${NOMAD_ADDR}"
 
 # Main function
@@ -90,11 +93,19 @@ main() {
   # Step 1: Setup Nomad authentication
   setup_nomad_auth
   
+  # Step 1.5: Setup Nomad SSL environment
+  setup_nomad_ssl
+  
   # Step 2: Check Docker permissions
   check_docker_permissions
   
   # Step 3: Prepare the data directory
   prepare_consul_directory
+  
+  # Step 3.5: Prepare SSL certificates for Consul if enabled
+  if [ "${CONSUL_ENABLE_SSL}" = "true" ]; then
+    prepare_consul_ssl
+  fi
   
   # Step 4: Create the job configuration
   create_consul_job
