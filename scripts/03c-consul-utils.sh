@@ -1,12 +1,367 @@
 #!/bin/bash
 # 03c-consul-utils.sh
-# Deployment functions for Consul deployment
+# DNS integration and helper functions for Consul Docker deployment
+
+# Create Docker-specific helper scripts
+create_docker_helper_scripts() {
+  log "Creating Docker helper scripts for Consul management..."
+  
+  # Create directory for scripts
+  mkdir -p "${PARENT_DIR}/bin"
+  
+  # Create consul-docker-run.sh (start script)
+  cat > "${PARENT_DIR}/bin/start-consul.sh" << EOF
+#!/bin/bash
+# Helper script to start Consul with Docker
+
+# Get the primary IP if not passed
+if [ -z "\$PRIMARY_IP" ]; then
+  PRIMARY_IP=\$(get_primary_ip)
+fi
+
+# Stop any existing container
+echo "Stopping any existing Consul container..."
+sudo docker stop consul 2>/dev/null || true
+sudo docker rm consul 2>/dev/null || true
+
+EOF
+
+  # Add SSL volumes if enabled
+  if [ "${CONSUL_ENABLE_SSL:-false}" = "true" ]; then
+    cat >> "${PARENT_DIR}/bin/start-consul.sh" << EOF
+# Starting Consul container with SSL enabled
+echo "Starting Consul container with SSL..."
+sudo docker run -d \\
+  --name consul \\
+  --restart always \\
+  --network host \\
+  -v "${DATA_DIR}/consul_data:/consul/data" \\
+  -v "${CONFIG_DIR}/consul:/consul/config" \\
+  -v "${DATA_DIR}/certificates/consul:/consul/config/certs" \\
+  hashicorp/consul:${CONSUL_VERSION} \\
+  agent -server -bootstrap \\
+  -bind=\$PRIMARY_IP \\
+  -advertise=\$PRIMARY_IP \\
+  -client=0.0.0.0 \\
+  -datacenter=${CONSUL_DATACENTER:-dc1} \\
+  -ui \\
+  -config-file=/consul/config/tls.json
+
+EOF
+  else
+    cat >> "${PARENT_DIR}/bin/start-consul.sh" << EOF
+# Starting Consul container without SSL
+echo "Starting Consul container..."
+sudo docker run -d \\
+  --name consul \\
+  --restart always \\
+  --network host \\
+  -v "${DATA_DIR}/consul_data:/consul/data" \\
+  hashicorp/consul:${CONSUL_VERSION} \\
+  agent -server -bootstrap \\
+  -bind=\$PRIMARY_IP \\
+  -advertise=\$PRIMARY_IP \\
+  -client=0.0.0.0 \\
+  -datacenter=${CONSUL_DATACENTER:-dc1} \\
+  -ui
+
+EOF
+  fi
+
+  cat >> "${PARENT_DIR}/bin/start-consul.sh" << EOF
+# Check if container started successfully
+if [ \$? -eq 0 ]; then
+  echo "Consul container started successfully"
+  echo "UI available at http://\$PRIMARY_IP:${CONSUL_HTTP_PORT}"
+  echo "Datacenter: ${CONSUL_DATACENTER:-dc1}"
+  exit 0
+else
+  echo "Failed to start Consul container"
+  exit 1
+fi
+EOF
+
+  # Create stop script
+  cat > "${PARENT_DIR}/bin/stop-consul.sh" << EOF
+#!/bin/bash
+# Helper script to stop Consul container
+
+echo "Stopping Consul container..."
+sudo docker stop consul
+if [ \$? -eq 0 ]; then
+  sudo docker rm consul
+  echo "Consul container stopped and removed"
+  exit 0
+else
+  echo "Failed to stop Consul container or container not running"
+  exit 1
+fi
+EOF
+
+  # Create status script
+  cat > "${PARENT_DIR}/bin/consul-status.sh" << EOF
+#!/bin/bash
+# Helper script to check Consul status
+
+echo "Checking Consul container status..."
+if sudo docker ps | grep -q "consul"; then
+  echo "✅ Consul container is running"
+  echo ""
+  echo "Container details:"
+  sudo docker ps --filter "name=consul" --format "table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+else
+  echo "❌ Consul container is not running"
+  
+  # Check if it exists but is stopped
+  if sudo docker ps -a | grep -q "consul"; then
+    echo "Consul container exists but is not running"
+    echo ""
+    echo "Container details:"
+    sudo docker ps -a --filter "name=consul" --format "table {{.ID}}\t{{.Image}}\t{{.Status}}"
+  fi
+fi
+
+# Check Consul HTTP endpoint
+echo ""
+echo "Checking Consul HTTP endpoint..."
+if curl -s -f "http://localhost:${CONSUL_HTTP_PORT}/v1/status/leader" &>/dev/null; then
+  echo "✅ Consul HTTP endpoint is responding"
+  echo "Leader: \$(curl -s http://localhost:${CONSUL_HTTP_PORT}/v1/status/leader)"
+  
+  # Get datacenter information
+  echo "Datacenter: \$(curl -s http://localhost:${CONSUL_HTTP_PORT}/v1/agent/self | grep -o '\"Datacenter\":\"[^\"]*\"' | cut -d':' -f2 | tr -d '\"')"
+else
+  echo "❌ Consul HTTP endpoint is not responding"
+fi
+
+# Check DNS endpoint
+echo ""
+echo "Checking Consul DNS endpoint..."
+if command -v dig &>/dev/null; then
+  dig @127.0.0.1 -p ${CONSUL_DNS_PORT} consul.service.consul. &>/dev/null
+  if [ \$? -eq 0 ]; then
+    echo "✅ Consul DNS endpoint is responding"
+  else
+    echo "❌ Consul DNS endpoint is not responding"
+  fi
+else
+  echo "❓ Cannot check DNS endpoint (dig command not found)"
+fi
+
+# Check ports
+echo ""
+echo "Checking Consul ports..."
+netstat -tuln | grep "${CONSUL_HTTP_PORT}\|${CONSUL_DNS_PORT}\|8300\|8301\|8302" || echo "No Consul ports found to be listening"
+
+# Check SSL configuration if enabled
+if [ "${CONSUL_ENABLE_SSL:-false}" = "true" ]; then
+  echo ""
+  echo "Checking Consul SSL configuration..."
+  if [ -f "${DATA_DIR}/certificates/consul/ca.pem" ] && \\
+     [ -f "${DATA_DIR}/certificates/consul/server.pem" ] && \\
+     [ -f "${DATA_DIR}/certificates/consul/server-key.pem" ]; then
+    echo "✅ Consul SSL certificates are in place"
+  else
+    echo "❌ Consul SSL certificates are missing"
+  fi
+  
+  if [ -f "${CONFIG_DIR}/consul/tls.json" ]; then
+    echo "✅ Consul TLS configuration exists"
+  else
+    echo "❌ Consul TLS configuration is missing"
+  fi
+fi
+
+# Check hosts file
+echo ""
+echo "Checking hosts file configuration..."
+if grep -q "consul\.service\.consul" /etc/hosts; then
+  echo "✅ consul.service.consul entry found in /etc/hosts"
+else
+  echo "❌ consul.service.consul entry not found in /etc/hosts"
+fi
+
+if grep -q "${CONSUL_HOST}" /etc/hosts; then
+  echo "✅ ${CONSUL_HOST} entry found in /etc/hosts"
+else
+  echo "❌ ${CONSUL_HOST} entry not found in /etc/hosts"
+fi
+
+exit 0
+EOF
+
+  # Create logs script for convenience
+  cat > "${PARENT_DIR}/bin/consul-logs.sh" << EOF
+#!/bin/bash
+# Helper script to view Consul logs
+
+if [ "\$1" == "--help" ] || [ "\$1" == "-h" ]; then
+  echo "Usage: \$0 [--follow|-f] [--tail=<N>]"
+  echo ""
+  echo "Options:"
+  echo "  --follow, -f    Follow log output"
+  echo "  --tail=<N>      Show last N lines of logs (default: all)"
+  exit 0
+fi
+
+FOLLOW=""
+TAIL=""
+
+# Parse arguments
+for arg in "\$@"; do
+  case \$arg in
+    --follow|-f)
+      FOLLOW="--follow"
+      ;;
+    --tail=*)
+      TAIL="--tail=\${arg#*=}"
+      ;;
+  esac
+done
+
+# Check if Consul container is running
+if ! sudo docker ps | grep -q "consul"; then
+  echo "❌ Consul container is not running!"
+  
+  # Check if it exists but is stopped
+  if sudo docker ps -a | grep -q "consul"; then
+    echo "Consul container exists but is not running"
+    echo "Use 'start-consul.sh' to start it"
+  else
+    echo "Consul container does not exist"
+    echo "Use 'start-consul.sh' to create and start it"
+  fi
+  
+  exit 1
+fi
+
+# View logs
+echo "Displaying Consul logs..."
+echo "----------------------------------------------------------------"
+sudo docker logs \$FOLLOW \$TAIL consul
+EOF
+  
+  # Create troubleshooting script
+  cat > "${PARENT_DIR}/bin/consul-troubleshoot.sh" << EOF
+#!/bin/bash
+# Quick troubleshooting script for Consul
+
+echo "=== Consul Troubleshooting ==="
+echo "Checking Consul status..."
+
+# Check if Consul is running in Docker
+if sudo docker ps | grep -q consul; then
+  echo "✅ Consul is running as a Docker container"
+  echo ""
+  echo "Container details:"
+  sudo docker ps --filter "name=consul" --format "table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}"
+  echo ""
+  echo "Container logs (last 20 lines):"
+  sudo docker logs --tail 20 consul
+else
+  echo "❌ Consul is not running as a Docker container"
+  
+  # Check if it exists but is stopped
+  if sudo docker ps -a | grep -q consul; then
+    echo "Consul container exists but is not running"
+    echo "Last logs before it stopped:"
+    sudo docker logs --tail 20 consul
+  fi
+fi
+
+# Check if Consul API is responding
+echo ""
+echo "Checking Consul API..."
+if curl -s -f "http://localhost:${CONSUL_HTTP_PORT}/v1/status/leader" &>/dev/null; then
+  echo "✅ Consul API is responding at http://localhost:${CONSUL_HTTP_PORT}"
+  echo "Leader: \$(curl -s http://localhost:${CONSUL_HTTP_PORT}/v1/status/leader)"
+  echo "Datacenter: \$(curl -s http://localhost:${CONSUL_HTTP_PORT}/v1/agent/self | grep -o '\"Datacenter\":\"[^\"]*\"' | cut -d':' -f2 | tr -d '\"')"
+else
+  echo "❌ Consul API is not responding at http://localhost:${CONSUL_HTTP_PORT}"
+  
+  # Try to identify why it's not responding
+  if sudo docker ps | grep -q consul; then
+    echo ""
+    echo "Container is running but API is not responding. Possible issues:"
+    echo "1. Network configuration problem"
+    echo "2. Consul not fully started or failing to bootstrap"
+    echo "3. SSL misconfiguration (if SSL is enabled)"
+    echo ""
+    echo "Full logs may contain more information:"
+    echo "sudo docker logs consul"
+  fi
+fi
+
+# Check ports
+echo ""
+echo "Checking for open ports..."
+netstat -tuln | grep "${CONSUL_HTTP_PORT}\|${CONSUL_DNS_PORT}\|8300\|8301\|8302" || echo "No Consul ports found"
+
+# Check DNS resolution
+echo ""
+echo "Checking DNS resolution..."
+ping -c 1 ${CONSUL_HOST} &>/dev/null && echo "✅ ${CONSUL_HOST} resolves correctly" || echo "❌ ${CONSUL_HOST} does not resolve"
+ping -c 1 consul.service.consul &>/dev/null && echo "✅ consul.service.consul resolves correctly" || echo "❌ consul.service.consul does not resolve"
+
+# Check DNS for datacenter-specific services
+ping -c 1 consul.service.${CONSUL_DATACENTER:-dc1}.consul &>/dev/null && echo "✅ consul.service.${CONSUL_DATACENTER:-dc1}.consul resolves correctly" || echo "❌ consul.service.${CONSUL_DATACENTER:-dc1}.consul does not resolve"
+
+# Check SSL configuration if enabled
+if [ "${CONSUL_ENABLE_SSL:-false}" = "true" ]; then
+  echo ""
+  echo "Checking Consul SSL configuration..."
+  if [ -f "${DATA_DIR}/certificates/consul/ca.pem" ] && \\
+     [ -f "${DATA_DIR}/certificates/consul/server.pem" ] && \\
+     [ -f "${DATA_DIR}/certificates/consul/server-key.pem" ]; then
+    echo "✅ SSL certificates exist at ${DATA_DIR}/certificates/consul/"
+  else
+    echo "❌ SSL certificates are missing from ${DATA_DIR}/certificates/consul/"
+  fi
+  
+  if [ -f "${CONFIG_DIR}/consul/tls.json" ]; then
+    echo "✅ TLS configuration exists at ${CONFIG_DIR}/consul/tls.json"
+    echo "Configuration contents:"
+    cat "${CONFIG_DIR}/consul/tls.json"
+  else
+    echo "❌ TLS configuration file is missing"
+  fi
+fi
+
+# Check volume permissions
+echo ""
+echo "Checking volume permissions..."
+ls -la "${DATA_DIR}/consul_data" || echo "❌ Consul data directory doesn't exist or is not accessible"
+
+# Check image
+echo ""
+echo "Checking Consul image..."
+sudo docker images | grep consul || echo "❌ No Consul image found"
+
+echo ""
+echo "=== End of Troubleshooting ==="
+echo ""
+echo "If issues persist, try the following:"
+echo "1. Run 'stop-consul.sh' to stop the current container"
+echo "2. Run 'start-consul.sh' to start a fresh container"
+echo "3. Check logs with 'consul-logs.sh'"
+echo "4. If SSL is enabled, verify certificate paths and permissions"
+EOF
+
+  # Make all scripts executable
+  chmod +x "${PARENT_DIR}/bin/start-consul.sh"
+  chmod +x "${PARENT_DIR}/bin/stop-consul.sh"
+  chmod +x "${PARENT_DIR}/bin/consul-status.sh"
+  chmod +x "${PARENT_DIR}/bin/consul-logs.sh"
+  chmod +x "${PARENT_DIR}/bin/consul-troubleshoot.sh"
+  
+  success "Docker-specific helper scripts created in ${PARENT_DIR}/bin/"
+}
 
 # Setup Consul DNS Integration with Synology
 setup_consul_dns() {
   log "Setting up Consul DNS integration with Synology..."
   
-  # Get the primary IP address if not set
+  # Get the primary IP address using standardized function
   if [ -z "$CONSUL_BIND_ADDR" ]; then
     CONSUL_BIND_ADDR=$(get_primary_ip)
   fi
@@ -24,12 +379,17 @@ setup_consul_dns() {
       warn "Failed to add consul.service.consul to hosts file. DNS resolution may not work."
     }
     
+    # Add datacenter-specific entry
+    echo "${CONSUL_BIND_ADDR} consul.service.${CONSUL_DATACENTER:-dc1}.consul" | sudo tee -a /etc/hosts > /dev/null || {
+      warn "Failed to add datacenter-specific consul entry to hosts file."
+    }
+    
     # Create a backup of the modified hosts file to the config directory
     sudo cp /etc/hosts ${CONFIG_DIR}/hosts.backup 2>/dev/null || {
       warn "Failed to backup hosts file to config directory."
     }
     
-    log "Added hosts file entry: ${CONSUL_BIND_ADDR} consul.service.consul"
+    log "Added hosts file entries for Consul DNS integration"
   fi
   
   # Attempt dnsmasq configuration if enabled
@@ -81,201 +441,14 @@ setup_consul_dns() {
     warn "Consul DNS integration might not be working properly. Please check manually with: ping consul.service.consul"
   fi
   
+  # Test datacenter-specific DNS resolution
+  log "Testing DNS resolution for datacenter-specific consul service..."
+  if ping -c 1 consul.service.${CONSUL_DATACENTER:-dc1}.consul &>/dev/null; then
+    success "Datacenter-specific Consul DNS integration configured successfully"
+  else
+    warn "Datacenter-specific Consul DNS integration might not be working properly"
+  fi
+  
   log "For full DNS integration throughout your network, consider adding DNS entries"
   log "in your router to forward .consul domains to ${CONSUL_BIND_ADDR}"
-}
-
-# Deploy Consul to Nomad
-deploy_consul_nomad() {
-  log "Deploying Consul as a Nomad job..."
-  
-  # Stop any existing Consul docker container from previous installations
-  log "Checking for existing Consul Docker container..."
-  sudo docker stop consul 2>/dev/null || true
-  sudo docker rm consul 2>/dev/null || true
-  
-  # Stop existing Consul Nomad job if it exists
-  log "Checking for existing Consul Nomad job..."
-  if [ -n "${NOMAD_TOKEN}" ]; then
-    NOMAD_TOKEN="${NOMAD_TOKEN}" nomad job stop -purge consul 2>/dev/null || true
-  else
-    nomad job stop -purge consul 2>/dev/null || true
-  fi
-  
-  # Run the Consul job with authentication if available
-  log "Starting Consul job..."
-  if [ -n "${NOMAD_TOKEN}" ]; then
-    NOMAD_TOKEN="${NOMAD_TOKEN}" nomad job run "${JOB_DIR}/consul.hcl"
-  else
-    nomad job run "${JOB_DIR}/consul.hcl"
-  fi
-  
-  # Wait for Consul to be ready
-  log "Waiting for Consul to be ready..."
-  sleep 10
-  
-  # Check if Consul job is running
-  local job_status=""
-  if [ -n "${NOMAD_TOKEN}" ]; then
-    job_status=$(NOMAD_TOKEN="${NOMAD_TOKEN}" nomad job status consul | grep -A 1 "Status" | tail -n 1)
-  else
-    job_status=$(nomad job status consul | grep -A 1 "Status" | tail -n 1)
-  fi
-  
-  if [[ "${job_status}" == *"running"* ]]; then
-    success "Consul job is running successfully in Nomad"
-  else
-    warn "Consul job status is not 'running'. Current status: ${job_status}"
-    warn "Check Nomad UI or job logs for more details."
-    
-    # Get allocation logs if possible
-    log "Checking allocation logs..."
-    local ALLOC_ID=""
-    if [ -n "${NOMAD_TOKEN}" ]; then
-      ALLOC_ID=$(NOMAD_TOKEN="${NOMAD_TOKEN}" nomad job status -json consul 2>/dev/null | grep -o '"ID":"[^"]*"' | head -1 | cut -d '"' -f 4)
-    else
-      ALLOC_ID=$(nomad job status -json consul 2>/dev/null | grep -o '"ID":"[^"]*"' | head -1 | cut -d '"' -f 4)
-    fi
-    
-    if [ -n "$ALLOC_ID" ]; then
-      if [ -n "${NOMAD_TOKEN}" ]; then
-        NOMAD_TOKEN="${NOMAD_TOKEN}" nomad alloc logs $ALLOC_ID 2>/dev/null || true
-      else
-        nomad alloc logs $ALLOC_ID 2>/dev/null || true
-      fi
-    fi
-  fi
-  
-  # Check if Consul service is responding
-  if ! curl -s http://localhost:${CONSUL_HTTP_PORT}/v1/status/leader > /dev/null; then
-    warn "Consul service might not be fully operational yet."
-    warn "Please check if the service is running using: curl -v http://localhost:${CONSUL_HTTP_PORT}/v1/status/leader"
-  else
-    success "Consul is running and responding to requests"
-  fi
-  
-  # Create a reference file
-  cat > $JOB_DIR/consul.reference << EOF
-# Consul deployed as a Nomad job
-# To restart: ${PARENT_DIR}/bin/start-consul.sh
-# To stop: ${PARENT_DIR}/bin/stop-consul.sh
-# To view status: ${PARENT_DIR}/bin/consul-status.sh 
-# To view logs: nomad alloc logs <allocation-id>
-# IP address: ${CONSUL_BIND_ADDR}
-# SSL enabled: ${CONSUL_ENABLE_SSL:-false}
-EOF
-
-  success "Consul deployment completed"
-}
-
-# Deploy Consul using direct Docker command (legacy method)
-deploy_consul_docker() {
-  log "Deploying Consul using direct Docker command for Synology..."
-  
-  # Get the primary IP address if not explicitly set in config
-  if [ -z "$CONSUL_BIND_ADDR" ] || [ -z "$CONSUL_ADVERTISE_ADDR" ]; then
-    PRIMARY_IP=$(get_primary_ip)
-    CONSUL_BIND_ADDR=${CONSUL_BIND_ADDR:-$PRIMARY_IP}
-    CONSUL_ADVERTISE_ADDR=${CONSUL_ADVERTISE_ADDR:-$PRIMARY_IP}
-  fi
-  
-  log "Using IP address: ${CONSUL_BIND_ADDR} for Consul"
-  
-  # Check if Docker is available
-  if ! command -v docker &>/dev/null; then
-    error "Docker is not available. Please install Docker first."
-  fi
-  
-  # Stop and remove any existing Consul container
-  log "Stopping any existing Consul container..."
-  sudo docker stop consul 2>/dev/null || true
-  sudo docker rm consul 2>/dev/null || true
-  
-  # Configure SSL if enabled
-  local ssl_volumes=""
-  local ssl_args=""
-  if [ "${CONSUL_ENABLE_SSL:-false}" = "true" ]; then
-    log "Configuring Consul Docker with SSL support..."
-    ssl_volumes="-v ${CONFIG_DIR}/consul:/consul/config -v ${DATA_DIR}/certificates/consul:/consul/config/certs"
-    ssl_args="-config-file=/consul/config/tls.json"
-  fi
-  
-  # Create startup script for Consul
-  log "Creating startup script for Consul..."
-  
-  mkdir -p ${PARENT_DIR}/bin
-  cat > ${PARENT_DIR}/bin/start-consul.sh << EOF
-#!/bin/bash
-# Start Consul container
-
-# Get the primary IP if not passed
-if [ -z "\$PRIMARY_IP" ]; then
-  PRIMARY_IP=\$(ip route get 1 | awk '{print \$7;exit}' 2>/dev/null || hostname -I | awk '{print \$1}')
-  if [ -z "\$PRIMARY_IP" ]; then
-    echo "Error: Could not determine primary IP address"
-    exit 1
-  fi
-fi
-
-sudo docker stop consul 2>/dev/null || true
-sudo docker rm consul 2>/dev/null || true
-sudo docker run -d --name consul \\
-  --restart always \\
-  --network host \\
-  -v ${DATA_DIR}/consul_data:/consul/data \\
-  ${ssl_volumes} \\
-  hashicorp/consul:${CONSUL_VERSION} \\
-  agent -server -bootstrap \\
-  -bind=${CONSUL_BIND_ADDR} \\
-  -advertise=${CONSUL_ADVERTISE_ADDR} \\
-  -client=0.0.0.0 \\
-  -ui \\
-  ${ssl_args}
-EOF
-  
-  chmod +x ${PARENT_DIR}/bin/start-consul.sh
-  
-  # Create stop script for Consul
-  cat > ${PARENT_DIR}/bin/stop-consul.sh << EOF
-#!/bin/bash
-# Stop Consul container
-sudo docker stop consul
-sudo docker rm consul
-EOF
-  
-  chmod +x ${PARENT_DIR}/bin/stop-consul.sh
-  
-  # Run the start script
-  log "Starting Consul container..."
-  PRIMARY_IP="${CONSUL_BIND_ADDR}" ${PARENT_DIR}/bin/start-consul.sh
-  
-  # Wait for Consul to be ready
-  log "Waiting for Consul to be ready..."
-  sleep 10
-  
-  # Check if Consul is running
-  if ! curl -s http://localhost:${CONSUL_HTTP_PORT}/v1/status/leader > /dev/null; then
-    warn "Consul might not be fully operational yet. Please check status manually with: sudo docker logs consul"
-    if ! sudo docker ps | grep -q "consul.*Up"; then
-      log "Consul container is not running. Checking logs:"
-      sudo docker logs consul
-      warn "Please fix the issues and restart the container manually with: sudo ${PARENT_DIR}/bin/start-consul.sh"
-    fi
-  else
-    success "Consul is running and responding to requests"
-  fi
-
-  # Create a nomad job reference file for uninstall purposes
-  mkdir -p $JOB_DIR
-  cat > $JOB_DIR/consul.reference << EOF
-# Note: Consul was deployed directly as a Docker container
-# To restart: ${PARENT_DIR}/bin/start-consul.sh
-# To stop: ${PARENT_DIR}/bin/stop-consul.sh
-# To view logs: sudo docker logs consul
-# Container name: consul
-# IP address: ${CONSUL_BIND_ADDR}
-# SSL enabled: ${CONSUL_ENABLE_SSL:-false}
-EOF
-
-  success "Consul deployment completed"
 }

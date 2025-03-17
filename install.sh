@@ -1,6 +1,6 @@
 #!/bin/bash
 # HomeLab DevOps Platform Installation Script
-# Updated version executing parts 01-04 for initial testing
+# Updated version executing parts 01-04 with Consul ACL integration
 
 set -e
 
@@ -110,6 +110,11 @@ check_prerequisites() {
     error "curl is not installed. Please install curl first."
   fi
   
+  # Check for jq (needed for ACL token management)
+  if ! command -v jq &> /dev/null; then
+    error "jq is not installed. Please install jq first. It's needed for ACL token management."
+  fi
+  
   # Check for dig (needed for Consul DNS testing)
   if ! command -v dig &> /dev/null; then
     warn "dig is not installed. This will be needed for Consul DNS verification."
@@ -124,6 +129,23 @@ load_configuration() {
   log "Loading configuration..."
   
   # Configuration was already loaded in setup_script_environment
+  
+  # Also load consul tokens if available (for subsequent modules)
+  if [ -f "${CONFIG_DIR}/consul_tokens.conf" ]; then
+    log "Loading Consul ACL tokens for service integration..."
+    source "${CONFIG_DIR}/consul_tokens.conf"
+    
+    # Export tokens as environment variables for subsequent scripts
+    export CONSUL_BOOTSTRAP_TOKEN
+    export CONSUL_NOMAD_TOKEN
+    export CONSUL_TRAEFIK_TOKEN
+    export CONSUL_VAULT_TOKEN
+    
+    success "Consul ACL tokens loaded"
+  else
+    log "No Consul ACL tokens configuration found. Will be created during Consul deployment."
+  fi
+  
   success "Configuration loaded"
 }
 
@@ -137,6 +159,35 @@ run_module() {
   if [ -f "${script_path}" ]; then
     # Pass all configuration to the script
     ${script_path} || error "Module ${module_name} failed"
+    
+    # If this was the Consul module, check if we have new token configuration
+    if [[ "$module_name" == "03-deploy-consul.sh" ]] && [ -f "${CONFIG_DIR}/consul_tokens.conf" ]; then
+      log "Consul tokens generated. Loading for subsequent modules..."
+      source "${CONFIG_DIR}/consul_tokens.conf"
+      
+      # Export tokens as environment variables for subsequent scripts
+      export CONSUL_BOOTSTRAP_TOKEN
+      export CONSUL_NOMAD_TOKEN
+      export CONSUL_TRAEFIK_TOKEN
+      export CONSUL_VAULT_TOKEN
+      
+      # Also display Nomad token for manual configuration
+      if [ ! -z "$CONSUL_NOMAD_TOKEN" ]; then
+        echo ""
+        echo "================================================================="
+        echo "CONSUL TOKEN FOR NOMAD CONFIGURATION"
+        echo "================================================================="
+        echo "Add the following to your Nomad configuration file (nomad.hcl):"
+        echo ""
+        echo "consul {"
+        echo "  token = \"${CONSUL_NOMAD_TOKEN}\""
+        echo "}"
+        echo ""
+        echo "Then restart Nomad to apply the changes."
+        echo "================================================================="
+      fi
+    fi
+    
     success "Module ${module_name} completed"
   else
     error "Module script not found: ${script_path}"
@@ -181,16 +232,56 @@ main() {
   # Load configuration (already done in setup_script_environment, but kept for clarity)
   load_configuration
   
-  # Run module scripts 01, 02, 03, and 04
+  # Run initial setup modules
   run_module "01-setup-directories.sh"
   run_module "02-configure-volumes.sh"
+  
+  # Deploy Consul with ACL
   run_module "03-deploy-consul.sh"
+  
+  # Check if we have Consul tokens and pause for Nomad configuration
+  if [ -f "${CONFIG_DIR}/consul_tokens.conf" ]; then
+    source "${CONFIG_DIR}/consul_tokens.conf"
+    
+    if [ ! -z "$CONSUL_NOMAD_TOKEN" ]; then
+      echo ""
+      echo "================================================================="
+      echo "CONSUL TOKEN FOR NOMAD CONFIGURATION"
+      echo "================================================================="
+      echo "Consul has been deployed with ACL enabled."
+      echo ""
+      echo "Please add the following to your Nomad configuration file (nomad.hcl):"
+      echo ""
+      echo "consul {"
+      echo "  token = \"${CONSUL_NOMAD_TOKEN}\""
+      echo "}"
+      echo ""
+      echo "Then restart Nomad to apply the changes."
+      echo "================================================================="
+      
+      # Pause for user action
+      echo ""
+      read -p "Press ENTER after you have updated and restarted Nomad to continue with Traefik deployment... " </dev/tty
+      echo ""
+      
+      log "Continuing with deployment after Nomad configuration..."
+    else
+      warn "Consul token for Nomad was not generated properly. Check the Consul ACL setup."
+    fi
+  else
+    warn "No Consul token configuration found. Proceeding without Nomad token setup."
+  fi
+  
+  # Continue with Traefik deployment
   run_module "04-deploy-traefik.sh"
   
   log "Installation (parts 01-04) completed successfully!"
   log "You can access Consul UI at http://localhost:${CONSUL_HTTP_PORT} or http://consul.homelab.local (if DNS is configured)"
   log "You can access Traefik dashboard at https://${TRAEFIK_HOST:-traefik.homelab.local} or http://localhost:${TRAEFIK_ADMIN_PORT:-8081}" 
   log "You can now proceed with testing before continuing to the next parts."
+  
+  # Since we already paused for Nomad configuration, no need for a final reminder
+  log "All components have been deployed with proper ACL configuration."
 }
 
 # Execute main function
